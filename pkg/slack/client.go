@@ -2,6 +2,7 @@
 package slack
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -410,23 +411,58 @@ func (c *Client) resolveUser(userID string) string {
 	return name
 }
 
+// ResolveChannelByName looks up a channel by name and returns its ID.
+// The input can be "#channel-name" or just "channel-name".
+func (c *Client) ResolveChannelByName(name string) (string, error) {
+	name = strings.TrimPrefix(name, "#")
+	params := &slackapi.GetConversationsForUserParameters{
+		Types: []string{"public_channel", "private_channel", "mpim"},
+		Limit: 200,
+	}
+	for {
+		convs, cursor, err := c.api.GetConversationsForUser(params)
+		if err != nil {
+			return "", fmt.Errorf("list channels: %w", err)
+		}
+		for _, ch := range convs {
+			if strings.EqualFold(ch.Name, name) {
+				return ch.ID, nil
+			}
+		}
+		if cursor == "" {
+			break
+		}
+		params.Cursor = cursor
+	}
+	return "", fmt.Errorf("channel %q not found", name)
+}
+
 // ResolveUserChannel looks up a user by name/display name and opens a DM channel.
 // The input can be "@username" or just "username".
 func (c *Client) ResolveUserChannel(name string) (string, error) {
 	name = strings.TrimPrefix(name, "@")
 
-	// Search for the user by listing all users (Slack has no lookup-by-name API for session tokens)
-	users, err := c.api.GetUsers()
-	if err != nil {
-		return "", fmt.Errorf("list users: %w", err)
-	}
-
+	// Paginate users.list, stop as soon as we find a match
+	ctx := context.Background()
 	var userID string
-	for _, u := range users {
-		if strings.EqualFold(u.Name, name) ||
-			strings.EqualFold(u.Profile.DisplayName, name) ||
-			strings.EqualFold(u.RealName, name) {
-			userID = u.ID
+	pager := c.api.GetUsersPaginated(slackapi.GetUsersOptionLimit(200))
+	for {
+		pager, err := pager.Next(ctx)
+		if failedErr := pager.Failure(err); failedErr != nil {
+			return "", fmt.Errorf("list users: %w", failedErr)
+		}
+		if pager.Done(err) {
+			break
+		}
+		for _, u := range pager.Users {
+			if strings.EqualFold(u.Name, name) ||
+				strings.EqualFold(u.Profile.DisplayName, name) ||
+				strings.EqualFold(u.RealName, name) {
+				userID = u.ID
+				break
+			}
+		}
+		if userID != "" {
 			break
 		}
 	}

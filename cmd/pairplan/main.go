@@ -78,20 +78,28 @@ func cmdStart() {
 		}
 	}
 
-	// Resolve --user to a DM channel
-	if targetUser != "" && cfg.Channel == "" {
+	// Resolve --channel name or --user to a channel ID
+	if targetUser != "" || (cfg.Channel != "" && !isSlackID(cfg.Channel)) {
 		client, err := pslack.New("")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		chID, err := client.ResolveUserChannel(targetUser)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error resolving user: %v\n", err)
-			os.Exit(1)
+		if targetUser != "" {
+			chID, err := client.ResolveUserChannel(targetUser)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error resolving user: %v\n", err)
+				os.Exit(1)
+			}
+			cfg.Channel = chID
+		} else {
+			chID, err := client.ResolveChannelByName(cfg.Channel)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error resolving channel: %v\n", err)
+				os.Exit(1)
+			}
+			cfg.Channel = chID
 		}
-		cfg.Channel = chID
-		fmt.Fprintf(os.Stderr, "Resolved @%s → %s\n", targetUser, chID)
 	}
 
 	// If no channel given, prompt with channel list when credentials exist
@@ -131,10 +139,13 @@ func promptChannel() string {
 		}
 		fmt.Printf("  %2d) %s\n", i+1, name)
 	}
-	fmt.Print("\nChannel [1]: ")
+	fmt.Print("\nChannel: ")
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
 
 	// @username → resolve to DM channel
 	if strings.HasPrefix(line, "@") {
@@ -147,12 +158,11 @@ func promptChannel() string {
 	}
 
 	idx := 0
-	if line != "" {
-		fmt.Sscanf(line, "%d", &idx)
-		idx--
-	}
+	fmt.Sscanf(line, "%d", &idx)
+	idx--
 	if idx < 0 || idx >= len(channels) {
-		idx = 0
+		fmt.Fprintf(os.Stderr, "Invalid choice\n")
+		return ""
 	}
 	return channels[idx].ID
 }
@@ -353,6 +363,15 @@ func cmdChannels() {
 		}
 		fmt.Printf("  %2d) %s\n", i+1, name)
 	}
+}
+
+// isSlackID returns true if s looks like a Slack channel/user ID (e.g. C01234, G01234, D01234).
+func isSlackID(s string) bool {
+	if len(s) < 2 {
+		return false
+	}
+	prefix := s[0]
+	return (prefix == 'C' || prefix == 'G' || prefix == 'D') && s[1] >= '0' && s[1] <= '9'
 }
 
 func slackProgress(p pslack.ListProgress) {
