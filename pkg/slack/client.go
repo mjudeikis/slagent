@@ -428,56 +428,40 @@ type ListProgress struct {
 }
 
 // ListChannels returns channels the user is a member of.
-// Channels/groups are always included. mpim/im are filtered
-// to those with activity in the last 30 days.
+// Channels/groups are always included. Group DMs (mpim) are filtered
+// to those with activity in the last 30 days. Individual 1:1 DMs are excluded.
 func (c *Client) ListChannels(progress func(ListProgress)) ([]Channel, error) {
 	params := &slackapi.GetConversationsForUserParameters{
-		Types:           []string{"public_channel", "private_channel", "mpim", "im"},
+		Types:           []string{"public_channel", "private_channel", "mpim"},
 		Limit:           200,
 		ExcludeArchived: true,
 	}
 
 	// Phase 1: collect all conversations
 	type candidate struct {
-		id, name, chType string
-		members          []string
+		id, name string
+		members  []string
 	}
-	var channels []candidate
-	var dms []candidate
+	var result []Channel
+	var groupDMs []candidate
 	for {
 		convs, cursor, err := c.api.GetConversationsForUser(params)
 		if err != nil {
 			return nil, fmt.Errorf("get conversations: %w", err)
 		}
 		for _, ch := range convs {
-			chType := "channel"
-			switch {
-			case ch.IsIM:
-				chType = "im"
-			case ch.IsMpIM:
-				chType = "mpim"
-			case ch.IsPrivate:
-				chType = "group"
-			}
-			name := ch.Name
-			if name == "" {
-				name = ch.ID
-			}
-			var members []string
-			if ch.IsIM {
-				members = []string{ch.User}
+			if ch.IsMpIM {
+				groupDMs = append(groupDMs, candidate{ch.ID, ch.Name, ch.Members})
 			} else {
-				members = ch.Members
-			}
-			cand := candidate{ch.ID, name, chType, members}
-			if chType == "mpim" || chType == "im" {
-				dms = append(dms, cand)
-			} else {
-				channels = append(channels, cand)
+				chType := "channel"
+				if ch.IsPrivate {
+					chType = "group"
+				}
+				result = append(result, Channel{ID: ch.ID, Name: ch.Name, Type: chType})
 			}
 		}
 		if progress != nil {
-			progress(ListProgress{Phase: "listing", Done: len(channels) + len(dms)})
+			progress(ListProgress{Phase: "listing", Done: len(result) + len(groupDMs)})
 		}
 		if cursor == "" {
 			break
@@ -485,23 +469,17 @@ func (c *Client) ListChannels(progress func(ListProgress)) ([]Channel, error) {
 		params.Cursor = cursor
 	}
 
-	// Channels/groups go straight into result
-	var result []Channel
-	for _, ch := range channels {
-		result = append(result, Channel{ID: ch.id, Name: ch.name, Type: ch.chType})
-	}
-
-	// Phase 2: check mpim/im for 30-day activity (concurrent, only DMs)
-	if len(dms) > 0 {
+	// Phase 2: check group DMs for 30-day activity (concurrent)
+	if len(groupDMs) > 0 {
 		cutoff := float64(time.Now().Add(-30 * 24 * time.Hour).Unix())
 		type dmResult struct {
 			ch Channel
 			ok bool
 		}
-		results := make(chan dmResult, len(dms))
-		sem := make(chan struct{}, 10)
+		results := make(chan dmResult, len(groupDMs))
+		sem := make(chan struct{}, 50)
 
-		for _, cand := range dms {
+		for _, cand := range groupDMs {
 			sem <- struct{}{}
 			go func(cand candidate) {
 				defer func() { <-sem }()
@@ -520,18 +498,18 @@ func (c *Client) ListChannels(progress func(ListProgress)) ([]Channel, error) {
 				}
 				name := c.resolveMemberNames(cand.members)
 				results <- dmResult{
-					ch: Channel{ID: cand.id, Name: name, Type: cand.chType},
+					ch: Channel{ID: cand.id, Name: name, Type: "mpim"},
 					ok: true,
 				}
 			}(cand)
 		}
 
 		checked := 0
-		for range dms {
+		for range groupDMs {
 			r := <-results
 			checked++
 			if progress != nil && checked%5 == 0 {
-				progress(ListProgress{Phase: "checking", Done: checked, Total: len(dms)})
+				progress(ListProgress{Phase: "checking", Done: checked, Total: len(groupDMs)})
 			}
 			if r.ok {
 				result = append(result, r.ch)
