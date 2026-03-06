@@ -514,13 +514,15 @@ func (c *Client) ResolveUserChannel(name string) (string, error) {
 	return "", fmt.Errorf("user %q not found", name)
 }
 
-// searchUser calls the undocumented users.search API to find a user by name.
+// searchUser calls the undocumented search.modules API with module=people
+// to find a user by name in a single API call.
 func (c *Client) searchUser(query string) (string, error) {
-	url := fmt.Sprintf("https://slack.com/api/users.search?q=%s&count=10", query)
-	req, err := http.NewRequest("GET", url, nil)
+	body := fmt.Sprintf("query=%s&count=5&module=people", query)
+	req, err := http.NewRequest("POST", "https://slack.com/api/search.modules", strings.NewReader(body))
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	if c.cookie != "" {
 		req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.cookie))
@@ -533,15 +535,15 @@ func (c *Client) searchUser(query string) (string, error) {
 	defer resp.Body.Close()
 
 	var result struct {
-		OK      bool `json:"ok"`
-		Results []struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Profile struct {
+		OK    bool `json:"ok"`
+		Items []struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+			Profile  struct {
 				DisplayName string `json:"display_name"`
 				RealName    string `json:"real_name"`
 			} `json:"profile"`
-		} `json:"results"`
+		} `json:"items"`
 		Error string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -551,16 +553,16 @@ func (c *Client) searchUser(query string) (string, error) {
 		return "", fmt.Errorf("%s", result.Error)
 	}
 
-	// Prefer exact match on name or display_name
-	for _, u := range result.Results {
-		if strings.EqualFold(u.Name, query) ||
+	// Prefer exact match
+	for _, u := range result.Items {
+		if strings.EqualFold(u.Username, query) ||
 			strings.EqualFold(u.Profile.DisplayName, query) ||
 			strings.EqualFold(u.Profile.RealName, query) {
 			return u.ID, nil
 		}
 	}
-	if len(result.Results) > 0 {
-		return result.Results[0].ID, nil
+	if len(result.Items) > 0 {
+		return result.Items[0].ID, nil
 	}
 	return "", fmt.Errorf("no results")
 }
