@@ -95,9 +95,7 @@ func promptChannel() string {
 		return ""
 	}
 
-	channels, err := client.ListChannels(func(n int) {
-		fmt.Fprintf(os.Stderr, "\rfetching channels... %d", n)
-	})
+	channels, err := client.ListChannels(slackProgress)
 	fmt.Fprint(os.Stderr, "\r\033[K")
 	if err != nil || len(channels) == 0 {
 		return ""
@@ -105,7 +103,11 @@ func promptChannel() string {
 
 	fmt.Println("Pick a channel:")
 	for i, ch := range channels {
-		fmt.Printf("  %2d) %-8s  %s\n", i+1, ch.Type, ch.Name)
+		prefix := "#"
+		if ch.Type == "mpim" {
+			prefix = " "
+		}
+		fmt.Printf("  %2d) %s%s\n", i+1, prefix, ch.Name)
 	}
 	fmt.Print("\nChannel [1]: ")
 	reader := bufio.NewReader(os.Stdin)
@@ -304,17 +306,28 @@ func cmdChannels() {
 		os.Exit(1)
 	}
 
-	channels, err := client.ListChannels(func(n int) {
-		fmt.Fprintf(os.Stderr, "\rfetching channels... %d", n)
-	})
-	fmt.Fprint(os.Stderr, "\r\033[K") // clear progress line
+	channels, err := client.ListChannels(slackProgress)
+	fmt.Fprint(os.Stderr, "\r\033[K")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error listing channels: %v\n", err)
 		os.Exit(1)
 	}
 
 	for i, ch := range channels {
-		fmt.Printf("  %2d) %-14s  %-8s  %s\n", i+1, ch.ID, ch.Type, ch.Name)
+		prefix := "#"
+		if ch.Type == "mpim" {
+			prefix = " "
+		}
+		fmt.Printf("  %2d) %s%-30s  %s\n", i+1, prefix, ch.Name, ch.ID)
+	}
+}
+
+func slackProgress(p pslack.ListProgress) {
+	switch p.Phase {
+	case "listing":
+		fmt.Fprintf(os.Stderr, "\rfetching channels... %d", p.Done)
+	case "checking":
+		fmt.Fprintf(os.Stderr, "\rchecking activity... %d/%d", p.Done, p.Total)
 	}
 }
 
