@@ -26,6 +26,7 @@ type Client struct {
 	threadTS   string // parent message timestamp (thread identifier)
 	lastTS     string // timestamp of last seen reply
 	userCache  map[string]string
+	postedTS   map[string]bool // timestamps of messages we posted via API
 	mu         sync.Mutex
 
 	// Token type and identity
@@ -136,6 +137,7 @@ func New(channel string) (*Client, error) {
 		cookie:     creds.Cookie,
 		channel:    channel,
 		userCache:  make(map[string]string),
+		postedTS:   make(map[string]bool),
 		tokenType:  tokenType,
 	}
 
@@ -169,9 +171,9 @@ const maxBlockTextLen = 3000
 
 // StartThread posts the thread parent message and returns the thread URL.
 func (c *Client) StartThread(topic string) (string, error) {
-	title := "📋 Planning session"
+	title := "🧵 Planning session"
 	if topic != "" {
-		title = fmt.Sprintf("📋 %s", topic)
+		title = fmt.Sprintf("🧵 Plan: %s", topic)
 	}
 	headerText := slackapi.NewTextBlockObject("plain_text", title, true, false)
 	header := slackapi.NewHeaderBlock(headerText)
@@ -214,12 +216,15 @@ func (c *Client) PostClaudeMessage(text string) error {
 			slackapi.NewTextBlockObject("mrkdwn", msg, false, false),
 			nil, nil,
 		)
-		_, _, err := c.api.PostMessage(
+		_, ts, err := c.api.PostMessage(
 			c.channel,
 			slackapi.MsgOptionBlocks(section),
 			slackapi.MsgOptionText(msg, false),
 			slackapi.MsgOptionTS(c.threadTS),
 		)
+		if err == nil {
+			c.trackPosted(ts)
+		}
 		return err
 	}
 
@@ -231,7 +236,7 @@ func (c *Client) PostClaudeMessage(text string) error {
 			slackapi.NewTextBlockObject("mrkdwn", wrapped, false, false),
 			nil, nil,
 		)
-		_, _, err := c.api.PostMessage(
+		_, ts, err := c.api.PostMessage(
 			c.channel,
 			slackapi.MsgOptionBlocks(section),
 			slackapi.MsgOptionText(chunk, false),
@@ -240,6 +245,7 @@ func (c *Client) PostClaudeMessage(text string) error {
 		if err != nil {
 			return err
 		}
+		c.trackPosted(ts)
 	}
 	return nil
 }
@@ -280,12 +286,15 @@ func (c *Client) PostUserMessage(user, text string) error {
 		slackapi.NewTextBlockObject("mrkdwn", text, false, false),
 		nil, nil,
 	)
-	_, _, err := c.api.PostMessage(
+	_, ts, err := c.api.PostMessage(
 		c.channel,
 		slackapi.MsgOptionBlocks(ctx, section),
 		slackapi.MsgOptionText(fmt.Sprintf("@%s: %s", user, text), false),
 		slackapi.MsgOptionTS(c.threadTS),
 	)
+	if err == nil {
+		c.trackPosted(ts)
+	}
 	return err
 }
 
@@ -298,12 +307,15 @@ func (c *Client) PostToolActivity(summary string) error {
 	ctx := slackapi.NewContextBlock("",
 		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("🔧 %s", summary), false, false),
 	)
-	_, _, err := c.api.PostMessage(
+	_, ts, err := c.api.PostMessage(
 		c.channel,
 		slackapi.MsgOptionBlocks(ctx),
 		slackapi.MsgOptionText(fmt.Sprintf("🔧 %s", summary), false),
 		slackapi.MsgOptionTS(c.threadTS),
 	)
+	if err == nil {
+		c.trackPosted(ts)
+	}
 	return err
 }
 
@@ -318,12 +330,15 @@ func (c *Client) PostSessionEnd() error {
 		nil, nil,
 	)
 	divider := slackapi.NewDividerBlock()
-	_, _, err := c.api.PostMessage(
+	_, ts, err := c.api.PostMessage(
 		c.channel,
 		slackapi.MsgOptionBlocks(section, divider),
 		slackapi.MsgOptionText("Planning session ended.", false),
 		slackapi.MsgOptionTS(c.threadTS),
 	)
+	if err == nil {
+		c.trackPosted(ts)
+	}
 	return err
 }
 
@@ -362,15 +377,17 @@ func (c *Client) PollReplies() ([]Reply, error) {
 			continue
 		}
 
-		// Skip our own messages: by UserID for user/session tokens, by BotID for bot tokens
-		if c.tokenType == "user" || c.tokenType == "session" {
-			if msg.User == c.ownUserID {
-				continue
-			}
-		} else {
-			if msg.BotID != "" {
-				continue
-			}
+		// Skip messages we posted via the API
+		c.mu.Lock()
+		ours := c.postedTS[msg.Timestamp]
+		c.mu.Unlock()
+		if ours {
+			continue
+		}
+
+		// Skip bot messages (from other bots)
+		if msg.BotID != "" {
+			continue
 		}
 
 		user := c.resolveUser(msg.User)
@@ -384,6 +401,21 @@ func (c *Client) PollReplies() ([]Reply, error) {
 	}
 
 	return replies, nil
+}
+
+// ResumeThread resumes polling an existing thread.
+func (c *Client) ResumeThread(threadTS string) {
+	c.mu.Lock()
+	c.threadTS = threadTS
+	c.lastTS = threadTS
+	c.mu.Unlock()
+}
+
+// trackPosted records a message timestamp as posted by us.
+func (c *Client) trackPosted(ts string) {
+	c.mu.Lock()
+	c.postedTS[ts] = true
+	c.mu.Unlock()
 }
 
 // ThreadTS returns the thread timestamp.
@@ -493,29 +525,49 @@ func saveUsersCache(users []cachedUser) {
 	os.WriteFile(usersCachePath(), data, 0o600)
 }
 
-// ResolveUserChannel looks up a user by name and opens a DM channel.
-// The input can be "@username" or just "username".
-// Uses undocumented users.search API (single call), falls back to cached users.list.
-func (c *Client) ResolveUserChannel(name string) (string, error) {
-	name = strings.TrimPrefix(name, "@")
-
-	// Try users.search first (single API call, instant)
-	if userID, err := c.searchUser(name); err == nil {
-		return c.openDM(name, userID)
+// ResolveUserChannel looks up one or more users by name and opens a DM/group DM channel.
+// Names can be "@username" or just "username".
+// Uses search.modules API (single call per user), falls back to on-disk cache.
+func (c *Client) ResolveUserChannel(names ...string) (string, error) {
+	var userIDs []string
+	for _, name := range names {
+		name = strings.TrimPrefix(name, "@")
+		userID, err := c.resolveOneUser(name)
+		if err != nil {
+			return "", fmt.Errorf("user %q not found", name)
+		}
+		userIDs = append(userIDs, userID)
 	}
 
-	// Fallback: check on-disk cache from previous users.list fetch
+	// Open DM (1 user) or group DM (multiple users)
+	ch, _, _, err := c.api.OpenConversation(&slackapi.OpenConversationParameters{
+		Users: userIDs,
+	})
+	if err != nil {
+		return "", fmt.Errorf("open conversation: %w", err)
+	}
+	return ch.ID, nil
+}
+
+// resolveOneUser resolves a single username to a user ID.
+func (c *Client) resolveOneUser(name string) (string, error) {
+	// Try search.modules first (single API call, instant)
+	if userID, err := c.searchUser(name); err == nil {
+		return userID, nil
+	}
+
+	// Fallback: check on-disk cache
 	if users, ok := loadUsersCache(); ok {
 		for _, u := range users {
 			if strings.EqualFold(u.Name, name) ||
 				strings.EqualFold(u.DisplayName, name) ||
 				strings.EqualFold(u.RealName, name) {
-				return c.openDM(name, u.ID)
+				return u.ID, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("user %q not found", name)
+	return "", fmt.Errorf("not found")
 }
 
 // searchUser calls the undocumented search.modules API with module=people
@@ -571,15 +623,6 @@ func (c *Client) searchUser(query string) (string, error) {
 	return "", fmt.Errorf("no results")
 }
 
-func (c *Client) openDM(name, userID string) (string, error) {
-	ch, _, _, err := c.api.OpenConversation(&slackapi.OpenConversationParameters{
-		Users: []string{userID},
-	})
-	if err != nil {
-		return "", fmt.Errorf("open DM with %q: %w", name, err)
-	}
-	return ch.ID, nil
-}
 
 // PollInterval is the recommended interval between PollReplies calls.
 const PollInterval = 3 * time.Second

@@ -21,6 +21,15 @@ type Config struct {
 	ChannelName    string // display name (e.g. "#general" or "@haarchri")
 	PermissionMode string
 	SystemPrompt   string
+	ResumeSessionID string // Claude session ID to resume
+	ResumeThreadTS  string // Slack thread timestamp to resume
+}
+
+// ResumeInfo is returned by Run so the caller can print a resume command.
+type ResumeInfo struct {
+	SessionID string
+	Channel   string
+	ThreadTS  string
 }
 
 // Session is a running pairplan planning session.
@@ -31,23 +40,29 @@ type Session struct {
 	slack *pslack.Client
 
 	// Slack reply queue: replies collected between turns
-	replyMu sync.Mutex
-	replies []pslack.Reply
+	replyMu     sync.Mutex
+	replies     []pslack.Reply
+	replyNotify chan struct{} // signaled when new replies arrive
 }
 
 // Run starts and runs the planning session until the user quits.
-func Run(ctx context.Context, cfg Config) error {
+// Returns ResumeInfo so the caller can print a resume command.
+func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	ui := terminal.New()
-	sess := &Session{cfg: cfg, ui: ui}
+	sess := &Session{
+		cfg:         cfg,
+		ui:          ui,
+		replyNotify: make(chan struct{}, 1),
+	}
 
 	// Set up Slack if channel is specified
 	if cfg.Channel != "" {
 		slackClient, err := pslack.New(cfg.Channel)
 		if err != nil {
-			return fmt.Errorf("slack: %w", err)
+			return nil, fmt.Errorf("slack: %w", err)
 		}
 		sess.slack = slackClient
 	}
@@ -61,30 +76,42 @@ func Run(ctx context.Context, cfg Config) error {
 		systemPrompt += extra
 	}
 
-	// Start Claude
+	// Start Claude (with resume if specified)
 	opts := []claude.Option{
 		claude.WithPermissionMode(cfg.PermissionMode),
 	}
 	if systemPrompt != "" {
 		opts = append(opts, claude.WithSystemPrompt(systemPrompt))
 	}
+	if cfg.ResumeSessionID != "" {
+		opts = append(opts, claude.WithResume(cfg.ResumeSessionID))
+	}
 
 	proc, err := claude.Start(ctx, opts...)
 	if err != nil {
-		return fmt.Errorf("start claude: %w", err)
+		return nil, fmt.Errorf("start claude: %w", err)
 	}
 	sess.proc = proc
 	defer proc.Stop()
 
-	// Start Slack thread
+	// Resume or start Slack thread
 	var threadURL string
 	if sess.slack != nil {
-		url, err := sess.slack.StartThread(cfg.Topic)
-		if err != nil {
-			return fmt.Errorf("start slack thread: %w", err)
+		if cfg.ResumeThreadTS != "" {
+			sess.slack.ResumeThread(cfg.ResumeThreadTS)
+			threadURL = "(resumed)"
+		} else {
+			url, err := sess.slack.StartThread(cfg.Topic)
+			if err != nil {
+				return nil, fmt.Errorf("start slack thread: %w", err)
+			}
+			threadURL = url
 		}
-		threadURL = url
 	}
+
+	// Hide cursor during session, restore on exit
+	ui.HideCursor()
+	defer ui.ShowCursor()
 
 	// Print banner
 	channelDisplay := cfg.ChannelName
@@ -93,57 +120,68 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	ui.Banner(cfg.Topic, channelDisplay, threadURL)
 
-	// Start Slack poller
-	if sess.slack != nil {
-		go sess.pollSlack(ctx)
-	}
-
-	// Main loop: prompt → send → stream response → repeat
-	for {
-		// Get user input
-		text, ok := ui.Prompt()
-		if !ok {
-			ui.Info("Session ended.")
-			break
-		}
-		if text == "" {
-			continue
-		}
-
-		// Handle special commands
-		if handleCommand(text, ui, sess) {
-			continue
-		}
-
-		// Display and mirror to Slack
-		ui.UserMessage(text)
+	// Send initial topic (skip on resume — Claude already has context)
+	if cfg.ResumeSessionID == "" {
 		if sess.slack != nil {
 			username := currentUser()
-			go sess.slack.PostUserMessage(username, text)
+			go sess.slack.PostUserMessage(username, cfg.Topic)
+		}
+		if err := proc.Send(cfg.Topic); err != nil {
+			return nil, fmt.Errorf("send topic: %w", err)
+		}
+		if err := sess.readTurn(); err != nil {
+			return nil, fmt.Errorf("reading initial response: %w", err)
+		}
+	}
+
+	// Without Slack, we're done after the initial response
+	if sess.slack == nil {
+		return nil, nil
+	}
+
+	// Start Slack poller
+	go sess.pollSlack(ctx)
+
+	// Auto-inject Slack feedback loop
+	for {
+		ui.Info("⏳ Waiting for team feedback from Slack...")
+		replies, ok := sess.waitForReplies(ctx)
+		if !ok {
+			break
 		}
 
-		// Send to Claude
-		if err := proc.Send(text); err != nil {
+		// Show in terminal
+		for _, r := range replies {
+			ui.SlackMessage(r.User, r.Text)
+		}
+
+		// Format and send to Claude
+		var sb strings.Builder
+		sb.WriteString("[Team feedback from Slack thread]\n")
+		for _, r := range replies {
+			fmt.Fprintf(&sb, "@%s: %s\n", r.User, r.Text)
+		}
+
+		if err := proc.Send(sb.String()); err != nil {
 			ui.Error(fmt.Sprintf("send to claude: %v", err))
 			break
 		}
-
-		// Read Claude's response
 		if err := sess.readTurn(); err != nil {
 			ui.Error(fmt.Sprintf("reading response: %v", err))
 			break
 		}
-
-		// Inject any queued Slack replies
-		sess.injectSlackReplies()
 	}
 
-	// Post session end to Slack
-	if sess.slack != nil {
-		sess.slack.PostSessionEnd()
+	ui.Info("👋 Session ended.")
+
+	// Build resume info
+	resume := &ResumeInfo{
+		SessionID: proc.SessionID(),
+		Channel:   cfg.Channel,
+		ThreadTS:  sess.slack.ThreadTS(),
 	}
 
-	return nil
+	return resume, nil
 }
 
 // readTurn reads events from Claude until the turn ends (result event).
@@ -234,37 +272,17 @@ func (s *Session) readTurn() error {
 	}
 }
 
-// injectSlackReplies sends any queued Slack replies to Claude.
-func (s *Session) injectSlackReplies() {
-	s.replyMu.Lock()
-	replies := s.replies
-	s.replies = nil
-	s.replyMu.Unlock()
-
-	if len(replies) == 0 {
-		return
-	}
-
-	// Show in terminal
-	for _, r := range replies {
-		s.ui.SlackMessage(r.User, r.Text)
-	}
-
-	// Format as a single message for Claude
-	var sb strings.Builder
-	sb.WriteString("[Team feedback from Slack thread]\n")
-	for _, r := range replies {
-		fmt.Fprintf(&sb, "@%s: %s\n", r.User, r.Text)
-	}
-
-	if err := s.proc.Send(sb.String()); err != nil {
-		s.ui.Error(fmt.Sprintf("inject slack replies: %v", err))
-		return
-	}
-
-	// Read Claude's response to the feedback
-	if err := s.readTurn(); err != nil {
-		s.ui.Error(fmt.Sprintf("reading response to slack feedback: %v", err))
+// waitForReplies blocks until Slack replies are available or context is cancelled.
+func (s *Session) waitForReplies(ctx context.Context) ([]pslack.Reply, bool) {
+	select {
+	case <-ctx.Done():
+		return nil, false
+	case <-s.replyNotify:
+		s.replyMu.Lock()
+		replies := s.replies
+		s.replies = nil
+		s.replyMu.Unlock()
+		return replies, true
 	}
 }
 
@@ -280,32 +298,21 @@ func (s *Session) pollSlack(ctx context.Context) {
 		case <-ticker.C:
 			replies, err := s.slack.PollReplies()
 			if err != nil {
-				// Silently ignore poll errors
 				continue
 			}
 			if len(replies) > 0 {
 				s.replyMu.Lock()
 				s.replies = append(s.replies, replies...)
 				s.replyMu.Unlock()
+
+				// Signal that replies are available
+				select {
+				case s.replyNotify <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}
-}
-
-// handleCommand processes special /commands. Returns true if handled.
-func handleCommand(text string, ui *terminal.UI, sess *Session) bool {
-	switch {
-	case text == "/quit" || text == "/exit":
-		ui.Info("Use Ctrl-D or Ctrl-C to exit.")
-		return true
-	case text == "/status":
-		ui.Info(fmt.Sprintf("Session ID: %s", sess.proc.SessionID()))
-		if sess.slack != nil {
-			ui.Info(fmt.Sprintf("Slack thread: %s", sess.slack.ThreadTS()))
-		}
-		return true
-	}
-	return false
 }
 
 func currentUser() string {

@@ -2,49 +2,45 @@
 package terminal
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
 )
 
-// Colors for terminal output.
+// ANSI escape sequences.
 const (
 	reset  = "\033[0m"
 	bold   = "\033[1m"
 	dim    = "\033[2m"
 	green  = "\033[32m"
-	yellow = "\033[33m"
-	blue   = "\033[34m"
 	cyan   = "\033[36m"
 	red    = "\033[31m"
+
+	hideCursor = "\033[?25l"
+	showCursor = "\033[?25h"
 )
 
 // UI provides simple terminal output for pairplan sessions.
 type UI struct {
-	reader    *bufio.Reader
 	streaming bool // true while Claude is streaming text
 }
 
 // New creates a new terminal UI.
 func New() *UI {
-	return &UI{
-		reader: bufio.NewReader(os.Stdin),
-	}
+	return &UI{}
 }
 
 // Banner prints the session start info.
 func (u *UI) Banner(topic, channel, threadURL string) {
-	fmt.Printf("\n%s%s pairplan %s", bold, blue, reset)
+	fmt.Printf("\n%s%s🧵 pairplan %s", bold, green, reset)
 	if topic != "" {
 		fmt.Printf(" — %s", topic)
 	}
 	fmt.Println()
 	if channel != "" {
-		fmt.Printf("%sChannel: %s%s\n", dim, channel, reset)
+		fmt.Printf("%s  💬 Channel: %s%s\n", dim, channel, reset)
 	}
 	if threadURL != "" {
-		fmt.Printf("%sThread:  %s%s\n", dim, threadURL, reset)
+		fmt.Printf("%s  🔗 Thread:  %s%s\n", dim, threadURL, reset)
 	}
 	fmt.Println(dim + strings.Repeat("─", 60) + reset)
 	fmt.Println()
@@ -52,7 +48,7 @@ func (u *UI) Banner(topic, channel, threadURL string) {
 
 // StartResponse begins a Claude response block.
 func (u *UI) StartResponse() {
-	fmt.Printf("%s%sClaude:%s ", bold, green, reset)
+	fmt.Printf("%s%s🤖 Claude:%s ", bold, green, reset)
 	u.streaming = true
 }
 
@@ -72,17 +68,22 @@ func (u *UI) EndResponse() {
 
 // ToolActivity shows a brief tool use notification.
 func (u *UI) ToolActivity(toolName, summary string) {
-	fmt.Printf("  %s> %s: %s%s\n", dim, toolName, summary, reset)
+	fmt.Printf("  %s🔧 %s: %s%s\n", dim, toolName, summary, reset)
 }
 
 // SlackMessage shows a message received from Slack.
 func (u *UI) SlackMessage(user, text string) {
-	fmt.Printf("  %s[Slack] @%s:%s %s\n", cyan, user, reset, text)
+	fmt.Printf("  %s💬 @%s:%s %s\n", cyan, user, reset, text)
 }
 
-// UserMessage echoes the user's input.
-func (u *UI) UserMessage(text string) {
-	fmt.Printf("%s%sYou:%s %s\n\n", bold, yellow, reset, text)
+// HideCursor hides the terminal cursor.
+func (u *UI) HideCursor() {
+	fmt.Print(hideCursor)
+}
+
+// ShowCursor shows the terminal cursor.
+func (u *UI) ShowCursor() {
+	fmt.Print(showCursor)
 }
 
 // Info prints a dim informational line.
@@ -92,21 +93,10 @@ func (u *UI) Info(msg string) {
 
 // Error prints an error.
 func (u *UI) Error(msg string) {
-	fmt.Printf("%s%sError: %s%s\n", bold, red, msg, reset)
-}
-
-// Prompt reads a line of input from the user. Returns the trimmed text
-// and false on EOF.
-func (u *UI) Prompt() (string, bool) {
-	fmt.Printf("%s%sYou> %s", bold, blue, reset)
-	line, err := u.reader.ReadString('\n')
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimSpace(line), true
+	fmt.Printf("%s%s❌ Error: %s%s\n", bold, red, msg, reset)
 }
 
 // Thinking shows a thinking indicator.
 func (u *UI) Thinking() {
-	fmt.Printf("  %s(thinking...)%s\n", dim, reset)
+	fmt.Printf("  %s💭 thinking...%s\n", dim, reset)
 }

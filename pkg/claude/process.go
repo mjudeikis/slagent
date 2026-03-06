@@ -53,6 +53,9 @@ func Start(ctx context.Context, opts ...Option) (*Process, error) {
 	if cfg.systemPrompt != "" {
 		args = append(args, "--system-prompt", cfg.systemPrompt)
 	}
+	if cfg.resumeSession != "" {
+		args = append(args, "--resume", cfg.resumeSession)
+	}
 
 	// Strip CLAUDECODE env var to allow nested invocation
 	env := make([]string, 0, len(os.Environ()))
@@ -145,6 +148,7 @@ type Option func(*config)
 type config struct {
 	permissionMode string
 	systemPrompt   string
+	resumeSession  string
 }
 
 // WithPermissionMode sets the permission mode (default: "plan").
@@ -155,4 +159,9 @@ func WithPermissionMode(mode string) Option {
 // WithSystemPrompt sets an additional system prompt.
 func WithSystemPrompt(prompt string) Option {
 	return func(c *config) { c.systemPrompt = prompt }
+}
+
+// WithResume resumes an existing Claude session by ID.
+func WithResume(sessionID string) Option {
+	return func(c *config) { c.resumeSession = sessionID }
 }
