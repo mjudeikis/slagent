@@ -2,7 +2,6 @@
 package slack
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -492,12 +491,16 @@ func saveUsersCache(users []cachedUser) {
 
 // ResolveUserChannel looks up a user by name and opens a DM channel.
 // The input can be "@username" or just "username".
-// Uses a 1-hour on-disk cache to avoid re-fetching the full user list.
-// The progress callback (if non-nil) receives the number of users fetched so far.
-func (c *Client) ResolveUserChannel(name string, progress func(int)) (string, error) {
+// Uses undocumented users.search API (single call), falls back to cached users.list.
+func (c *Client) ResolveUserChannel(name string) (string, error) {
 	name = strings.TrimPrefix(name, "@")
 
-	// Try cache first
+	// Try users.search first (single API call, instant)
+	if userID, err := c.searchUser(name); err == nil {
+		return c.openDM(name, userID)
+	}
+
+	// Fallback: check on-disk cache from previous users.list fetch
 	if users, ok := loadUsersCache(); ok {
 		for _, u := range users {
 			if strings.EqualFold(u.Name, name) ||
@@ -506,49 +509,60 @@ func (c *Client) ResolveUserChannel(name string, progress func(int)) (string, er
 				return c.openDM(name, u.ID)
 			}
 		}
-		return "", fmt.Errorf("user %q not found", name)
 	}
 
-	// Fetch all users, cache them, then search
-	ctx := context.Background()
-	var all []cachedUser
-	var userID string
-	pager := c.api.GetUsersPaginated(slackapi.GetUsersOptionLimit(1000))
-	for {
-		pager, err := pager.Next(ctx)
-		if failedErr := pager.Failure(err); failedErr != nil {
-			return "", fmt.Errorf("users.list: %w", failedErr)
-		}
-		if pager.Done(err) {
-			break
-		}
-		for _, u := range pager.Users {
-			cu := cachedUser{
-				ID:          u.ID,
-				Name:        u.Name,
-				DisplayName: u.Profile.DisplayName,
-				RealName:    u.RealName,
-			}
-			all = append(all, cu)
-			if userID == "" &&
-				(strings.EqualFold(u.Name, name) ||
-					strings.EqualFold(u.Profile.DisplayName, name) ||
-					strings.EqualFold(u.RealName, name)) {
-				userID = u.ID
-			}
-		}
-		if progress != nil {
-			progress(len(all))
-		}
+	return "", fmt.Errorf("user %q not found", name)
+}
+
+// searchUser calls the undocumented users.search API to find a user by name.
+func (c *Client) searchUser(query string) (string, error) {
+	url := fmt.Sprintf("https://slack.com/api/users.search?q=%s&count=10", query)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.cookie != "" {
+		req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.cookie))
 	}
 
-	// Always save the full list for next time
-	saveUsersCache(all)
-
-	if userID == "" {
-		return "", fmt.Errorf("user %q not found", name)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
 	}
-	return c.openDM(name, userID)
+	defer resp.Body.Close()
+
+	var result struct {
+		OK      bool `json:"ok"`
+		Results []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Profile struct {
+				DisplayName string `json:"display_name"`
+				RealName    string `json:"real_name"`
+			} `json:"profile"`
+		} `json:"results"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if !result.OK {
+		return "", fmt.Errorf("%s", result.Error)
+	}
+
+	// Prefer exact match on name or display_name
+	for _, u := range result.Results {
+		if strings.EqualFold(u.Name, query) ||
+			strings.EqualFold(u.Profile.DisplayName, query) ||
+			strings.EqualFold(u.Profile.RealName, query) {
+			return u.ID, nil
+		}
+	}
+	if len(result.Results) > 0 {
+		return result.Results[0].ID, nil
+	}
+	return "", fmt.Errorf("no results")
 }
 
 func (c *Client) openDM(name, userID string) (string, error) {
