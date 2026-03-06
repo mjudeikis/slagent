@@ -110,7 +110,7 @@ func cmdStart() {
 	}
 }
 
-// promptChannel lists channels and lets the user pick one.
+// promptChannel lists channels and lets the user pick one, or type @username for a DM.
 func promptChannel() string {
 	client, err := pslack.New("")
 	if err != nil {
@@ -123,7 +123,7 @@ func promptChannel() string {
 		return ""
 	}
 
-	fmt.Println("Pick a channel:")
+	fmt.Println("Pick a channel (or type @username for a DM):")
 	for i, ch := range channels {
 		name := ch.Name
 		if ch.Type == "channel" || ch.Type == "group" {
@@ -135,6 +135,17 @@ func promptChannel() string {
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	line = strings.TrimSpace(line)
+
+	// @username → resolve to DM channel
+	if strings.HasPrefix(line, "@") {
+		chID, err := client.ResolveUserChannel(line)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return ""
+		}
+		return chID
+	}
+
 	idx := 0
 	if line != "" {
 		fmt.Sscanf(line, "%d", &idx)
