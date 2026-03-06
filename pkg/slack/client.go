@@ -493,7 +493,8 @@ func saveUsersCache(users []cachedUser) {
 // ResolveUserChannel looks up a user by name and opens a DM channel.
 // The input can be "@username" or just "username".
 // Uses a 1-hour on-disk cache to avoid re-fetching the full user list.
-func (c *Client) ResolveUserChannel(name string) (string, error) {
+// The progress callback (if non-nil) receives the number of users fetched so far.
+func (c *Client) ResolveUserChannel(name string, progress func(int)) (string, error) {
 	name = strings.TrimPrefix(name, "@")
 
 	// Try cache first
@@ -535,6 +536,9 @@ func (c *Client) ResolveUserChannel(name string) (string, error) {
 					strings.EqualFold(u.RealName, name)) {
 				userID = u.ID
 			}
+		}
+		if progress != nil {
+			progress(len(all))
 		}
 	}
 
