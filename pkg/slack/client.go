@@ -535,14 +535,14 @@ func (c *Client) ListChannels(progress func(ListProgress)) ([]Channel, error) {
 		}
 	}
 
-	// Sort: channels/groups first (by activity), then mpim (by activity)
+	// Sort: channels/groups first (alphabetical), then mpim (alphabetical)
 	sort.Slice(active, func(i, j int) bool {
 		iMpim := active[i].Type == "mpim"
 		jMpim := active[j].Type == "mpim"
 		if iMpim != jMpim {
 			return !iMpim
 		}
-		return active[i].LastActivity > active[j].LastActivity
+		return active[i].Name < active[j].Name
 	})
 
 	return active, nil
