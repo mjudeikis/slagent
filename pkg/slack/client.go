@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -417,8 +416,8 @@ const PollInterval = 3 * time.Second
 type Channel struct {
 	ID       string
 	Name     string
-	Type     string  // "channel", "group", "im", "mpim"
-	LastActivity float64 // unix timestamp of last message (0 if unknown)
+	Type     string  // "channel", "group", "mpim"
+	Priority float64 // Slack sidebar priority (higher = more important)
 }
 
 // ListChannels returns channels the user is a member of, sorted by recent
@@ -431,7 +430,6 @@ func (c *Client) ListChannels(progress func(n int)) ([]Channel, error) {
 		ExcludeArchived: true,
 	}
 
-	cutoff := float64(time.Now().Add(-30 * 24 * time.Hour).Unix())
 	var result []Channel
 	for {
 		channels, cursor, err := c.api.GetConversationsForUser(params)
@@ -439,20 +437,6 @@ func (c *Client) ListChannels(progress func(n int)) ([]Channel, error) {
 			return nil, fmt.Errorf("get conversations: %w", err)
 		}
 		for _, ch := range channels {
-			// Determine last activity from Latest message or LastRead
-			var lastActivity float64
-			if ch.Latest != nil && ch.Latest.Timestamp != "" {
-				lastActivity, _ = strconv.ParseFloat(ch.Latest.Timestamp, 64)
-			}
-			if lastActivity == 0 && ch.LastRead != "" {
-				lastActivity, _ = strconv.ParseFloat(ch.LastRead, 64)
-			}
-
-			// Only include channels with known recent activity
-			if lastActivity < cutoff {
-				continue
-			}
-
 			chType := "channel"
 			switch {
 			case ch.IsMpIM:
@@ -464,7 +448,12 @@ func (c *Client) ListChannels(progress func(n int)) ([]Channel, error) {
 			if name == "" {
 				name = ch.ID
 			}
-			result = append(result, Channel{ID: ch.ID, Name: name, Type: chType, LastActivity: lastActivity})
+			result = append(result, Channel{
+				ID:       ch.ID,
+				Name:     name,
+				Type:     chType,
+				Priority: ch.Priority,
+			})
 		}
 		if progress != nil {
 			progress(len(result))
@@ -475,9 +464,9 @@ func (c *Client) ListChannels(progress func(n int)) ([]Channel, error) {
 		params.Cursor = cursor
 	}
 
-	// Sort by most recent activity first
+	// Sort by Slack's sidebar priority (higher = more recent/important)
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].LastActivity > result[j].LastActivity
+		return result[i].Priority > result[j].Priority
 	})
 
 	return result, nil
