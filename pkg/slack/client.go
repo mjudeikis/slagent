@@ -483,8 +483,12 @@ func (c *Client) ListChannels(progress func(ListProgress)) ([]Channel, error) {
 	results := make(chan indexedResult, len(candidates))
 	total := len(candidates)
 
+	if progress != nil {
+		progress(ListProgress{Phase: "checking", Done: 0, Total: total})
+	}
+
 	// Limit concurrency to 10 to avoid rate limits
-	var checked int64
+	var checked int
 	sem := make(chan struct{}, 10)
 	for i, cand := range candidates {
 		sem <- struct{}{}
@@ -523,8 +527,8 @@ func (c *Client) ListChannels(progress func(ListProgress)) ([]Channel, error) {
 	for range candidates {
 		r := <-results
 		checked++
-		if progress != nil {
-			progress(ListProgress{Phase: "checking", Done: int(checked), Total: total})
+		if progress != nil && checked%5 == 0 {
+			progress(ListProgress{Phase: "checking", Done: checked, Total: total})
 		}
 		if r.ok {
 			active = append(active, r.ch)
