@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/alecthomas/kong v1.14.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db // indirect
 	github.com/google/uuid v1.6.0 // indirect

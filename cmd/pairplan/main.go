@@ -8,96 +8,53 @@ import (
 	"os/signal"
 	"strings"
 
+	"github.com/alecthomas/kong"
+
 	"github.com/sttts/pairplan/pkg/session"
 	pslack "github.com/sttts/pairplan/pkg/slack"
 	"github.com/sttts/pairplan/pkg/slack/extract"
 )
 
-func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
-	}
-
-	switch os.Args[1] {
-	case "start":
-		cmdStart()
-	case "auth":
-		cmdAuth()
-	case "channels":
-		cmdChannels()
-	case "share":
-		cmdShare()
-	case "status":
-		cmdStatus()
-	case "help", "-h", "--help":
-		printUsage()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
-		printUsage()
-		os.Exit(1)
-	}
+var cli struct {
+	Start    StartCmd    `cmd:"" help:"Start a planning session mirrored to Slack."`
+	Auth     AuthCmd     `cmd:"" help:"Set up Slack credentials."`
+	Channels ChannelsCmd `cmd:"" help:"List Slack channels and group DMs."`
+	Share    ShareCmd    `cmd:"" help:"Post a plan file to Slack for review."`
+	Status   StatusCmd   `cmd:"" help:"Show current configuration."`
 }
 
-func cmdStart() {
-	cfg := session.Config{
-		PermissionMode: "plan",
-	}
+// StartCmd starts an interactive planning session with Claude Code.
+type StartCmd struct {
+	Channel        string   `short:"c" help:"Slack channel name or ID." placeholder:"CHANNEL"`
+	User           string   `short:"u" help:"Slack user for DM (name or @name)." placeholder:"USER"`
+	Topic          []string `arg:"" optional:"" help:"Planning topic."`
+	PermissionMode string   `help:"Claude permission mode." default:"plan"`
+}
 
-	// Parse flags
-	var targetUser string
-	args := os.Args[2:]
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--channel", "-c":
-			i++
-			if i < len(args) {
-				cfg.Channel = args[i]
-			}
-		case "--user", "-u":
-			i++
-			if i < len(args) {
-				targetUser = args[i]
-			}
-		case "--topic", "-t":
-			i++
-			if i < len(args) {
-				cfg.Topic = args[i]
-			}
-		case "--permission-mode":
-			i++
-			if i < len(args) {
-				cfg.PermissionMode = args[i]
-			}
-		default:
-			// Treat remaining args as topic
-			if cfg.Topic == "" {
-				cfg.Topic = strings.Join(args[i:], " ")
-				i = len(args)
-			}
-		}
+func (cmd *StartCmd) Run() error {
+	cfg := session.Config{
+		PermissionMode: cmd.PermissionMode,
+		Topic:          strings.Join(cmd.Topic, " "),
+		Channel:        cmd.Channel,
 	}
 
 	// Resolve --channel name or --user to a channel ID
-	if targetUser != "" || (cfg.Channel != "" && !isSlackID(cfg.Channel)) {
+	if cmd.User != "" || (cfg.Channel != "" && !isSlackID(cfg.Channel)) {
 		client, err := pslack.New("")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			return err
 		}
-		if targetUser != "" {
-			chID, err := client.ResolveUserChannel(targetUser, userProgress)
+		if cmd.User != "" {
+			chID, err := client.ResolveUserChannel(cmd.User, userProgress)
 			fmt.Fprint(os.Stderr, "\r\033[K")
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error resolving user: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("resolving user: %w", err)
 			}
 			cfg.Channel = chID
 		} else {
 			chID, err := client.ResolveChannelByName(cfg.Channel)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error resolving channel: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("resolving channel: %w", err)
 			}
 			cfg.Channel = chID
 		}
@@ -113,7 +70,114 @@ func cmdStart() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	if err := session.Run(ctx, cfg); err != nil {
+	return session.Run(ctx, cfg)
+}
+
+// AuthCmd sets up Slack credentials.
+type AuthCmd struct {
+	Extract bool `help:"Extract credentials from local Slack desktop app."`
+}
+
+func (cmd *AuthCmd) Run() error {
+	if cmd.Extract {
+		return runAuthExtract()
+	}
+	return runAuthManual()
+}
+
+// ChannelsCmd lists accessible Slack channels.
+type ChannelsCmd struct{}
+
+func (cmd *ChannelsCmd) Run() error {
+	client, err := pslack.New("")
+	if err != nil {
+		return err
+	}
+
+	channels, err := client.ListChannels(slackProgress)
+	fmt.Fprint(os.Stderr, "\r\033[K")
+	if err != nil {
+		return fmt.Errorf("listing channels: %w", err)
+	}
+
+	for i, ch := range channels {
+		name := ch.Name
+		if ch.Type == "channel" || ch.Type == "group" {
+			name = "#" + name
+		}
+		fmt.Printf("  %2d) %s\n", i+1, name)
+	}
+	return nil
+}
+
+// ShareCmd posts a plan file to Slack.
+type ShareCmd struct {
+	File    string `arg:"" help:"Plan file to share."`
+	Channel string `short:"c" required:"" help:"Slack channel name or ID." placeholder:"CHANNEL"`
+}
+
+func (cmd *ShareCmd) Run() error {
+	content, err := os.ReadFile(cmd.File)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", cmd.File, err)
+	}
+
+	channel := cmd.Channel
+	if !isSlackID(channel) {
+		client, err := pslack.New("")
+		if err != nil {
+			return err
+		}
+		channel, err = client.ResolveChannelByName(channel)
+		if err != nil {
+			return fmt.Errorf("resolving channel: %w", err)
+		}
+	}
+
+	client, err := pslack.New(channel)
+	if err != nil {
+		return err
+	}
+
+	topic := fmt.Sprintf("Plan review: %s", cmd.File)
+	url, err := client.StartThread(topic)
+	if err != nil {
+		return err
+	}
+
+	if err := client.PostClaudeMessage(string(content)); err != nil {
+		return fmt.Errorf("posting plan: %w", err)
+	}
+
+	fmt.Printf("Plan shared: %s\n", url)
+	return nil
+}
+
+// StatusCmd shows current configuration.
+type StatusCmd struct{}
+
+func (cmd *StatusCmd) Run() error {
+	fmt.Println("No active session.")
+	creds, err := pslack.LoadCredentials()
+	if err != nil {
+		fmt.Println("Slack: not configured (run 'pairplan auth')")
+	} else {
+		token := creds.EffectiveToken()
+		if len(token) > 10 {
+			token = token[:10]
+		}
+		fmt.Printf("Slack: configured (%s token: %s...)\n", creds.EffectiveType(), token)
+	}
+	return nil
+}
+
+func main() {
+	ctx := kong.Parse(&cli,
+		kong.Name("pairplan"),
+		kong.Description("Mirror Claude Code planning sessions to Slack threads."),
+		kong.UsageOnError(),
+	)
+	if err := ctx.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -169,15 +233,7 @@ func promptChannel() string {
 	return channels[idx].ID
 }
 
-func cmdAuth() {
-	// Check for --extract flag
-	for _, arg := range os.Args[2:] {
-		if arg == "--extract" {
-			cmdAuthExtract()
-			return
-		}
-	}
-
+func runAuthManual() error {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("Slack Token Setup")
 	fmt.Println(strings.Repeat("─", 40))
@@ -199,8 +255,7 @@ func cmdAuth() {
 	fmt.Print("Paste your token: ")
 	token, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("reading input: %w", err)
 	}
 	token = strings.TrimSpace(token)
 
@@ -218,87 +273,24 @@ func cmdAuth() {
 
 	creds := &pslack.Credentials{Token: token, Type: tokenType}
 	if err := pslack.SaveCredentials(creds); err != nil {
-		fmt.Fprintf(os.Stderr, "Error saving credentials: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("saving credentials: %w", err)
 	}
 
 	fmt.Printf("\nCredentials saved to %s (%s token)\n", pslack.CredentialsPath(), tokenType)
 	if tokenType == "bot" {
 		fmt.Println("Don't forget to invite the bot to your channel: /invite @your-bot-name")
 	}
+	return nil
 }
 
-func cmdShare() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: pairplan share <plan-file> [--channel CHANNEL]\n")
-		os.Exit(1)
-	}
-
-	planFile := os.Args[2]
-	var channel string
-
-	for i := 3; i < len(os.Args); i++ {
-		if (os.Args[i] == "--channel" || os.Args[i] == "-c") && i+1 < len(os.Args) {
-			i++
-			channel = os.Args[i]
-		}
-	}
-
-	if channel == "" {
-		fmt.Fprintf(os.Stderr, "Error: --channel is required\n")
-		os.Exit(1)
-	}
-
-	content, err := os.ReadFile(planFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", planFile, err)
-		os.Exit(1)
-	}
-
-	client, err := pslack.New(channel)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	topic := fmt.Sprintf("Plan review: %s", planFile)
-	url, err := client.StartThread(topic)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := client.PostClaudeMessage(string(content)); err != nil {
-		fmt.Fprintf(os.Stderr, "Error posting plan: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Plan shared: %s\n", url)
-}
-
-func cmdStatus() {
-	fmt.Println("No active session.")
-	creds, err := pslack.LoadCredentials()
-	if err != nil {
-		fmt.Println("Slack: not configured (run 'pairplan auth')")
-	} else {
-		token := creds.EffectiveToken()
-		if len(token) > 10 {
-			token = token[:10]
-		}
-		fmt.Printf("Slack: configured (%s token: %s...)\n", creds.EffectiveType(), token)
-	}
-}
-
-func cmdAuthExtract() {
+func runAuthExtract() error {
 	fmt.Println("Extracting Slack credentials from desktop app...")
 	fmt.Println("(you may see a macOS keychain access prompt — please allow access)")
 	fmt.Println()
 
 	result, err := extract.Extract()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Choose workspace
@@ -332,8 +324,7 @@ func cmdAuthExtract() {
 		Cookie: result.Cookie,
 	}
 	if err := pslack.SaveCredentials(creds); err != nil {
-		fmt.Fprintf(os.Stderr, "Error saving credentials: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("saving credentials: %w", err)
 	}
 
 	tokenPreview := ws.Token
@@ -342,29 +333,7 @@ func cmdAuthExtract() {
 	}
 	fmt.Printf("\nCredentials saved for %s (token: %s...)\n", ws.Name, tokenPreview)
 	fmt.Printf("Credentials file: %s\n", pslack.CredentialsPath())
-}
-
-func cmdChannels() {
-	client, err := pslack.New("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	channels, err := client.ListChannels(slackProgress)
-	fmt.Fprint(os.Stderr, "\r\033[K")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error listing channels: %v\n", err)
-		os.Exit(1)
-	}
-
-	for i, ch := range channels {
-		name := ch.Name
-		if ch.Type == "channel" || ch.Type == "group" {
-			name = "#" + name
-		}
-		fmt.Printf("  %2d) %s\n", i+1, name)
-	}
+	return nil
 }
 
 // isSlackID returns true if s looks like a Slack channel/user ID (e.g. C01234, G01234, D01234).
@@ -387,27 +356,4 @@ func slackProgress(p pslack.ListProgress) {
 	default:
 		fmt.Fprintf(os.Stderr, "\rfetching channels... %d", p.Done)
 	}
-}
-
-func printUsage() {
-	fmt.Println(`pairplan — Mirror Claude Code planning sessions to Slack
-
-Usage:
-  pairplan start [--channel C] [--user @name] [--topic "what we're planning"]
-      Start a planning session. Mirrors to Slack if --channel or --user is given.
-
-  pairplan auth
-      Set up Slack token (paste xoxb-/xoxp- token).
-
-  pairplan auth --extract
-      Auto-extract session token from local Slack desktop app.
-
-  pairplan channels
-      List your Slack channels and group DMs.
-
-  pairplan share <plan-file> --channel C
-      Post a plan file to Slack for review.
-
-  pairplan status
-      Show current configuration.`)
 }
