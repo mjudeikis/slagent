@@ -103,11 +103,11 @@ func promptChannel() string {
 
 	fmt.Println("Pick a channel:")
 	for i, ch := range channels {
-		prefix := "#"
-		if ch.Type == "mpim" {
-			prefix = " "
+		name := ch.Name
+		if ch.Type != "mpim" {
+			name = "#" + name
 		}
-		fmt.Printf("  %2d) %s%s\n", i+1, prefix, ch.Name)
+		fmt.Printf("  %2d) %s\n", i+1, name)
 	}
 	fmt.Print("\nChannel [1]: ")
 	reader := bufio.NewReader(os.Stdin)
@@ -314,11 +314,11 @@ func cmdChannels() {
 	}
 
 	for i, ch := range channels {
-		prefix := "#"
-		if ch.Type == "mpim" {
-			prefix = " "
+		name := ch.Name
+		if ch.Type != "mpim" {
+			name = "#" + name
 		}
-		fmt.Printf("  %2d) %s%s\n", i+1, prefix, ch.Name)
+		fmt.Printf("  %2d) %s\n", i+1, name)
 	}
 }
 
