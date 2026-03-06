@@ -50,20 +50,31 @@ func (cmd *StartCmd) Run() error {
 				return fmt.Errorf("resolving user: %w", err)
 			}
 			cfg.Channel = chID
+			cfg.ChannelName = "@" + strings.TrimPrefix(cmd.User, "@")
 		} else {
-			chID, err := client.ResolveChannelByName(cfg.Channel)
+			channelName := strings.TrimPrefix(cfg.Channel, "#")
+			chID, err := client.ResolveChannelByName(channelName)
 			if err != nil {
 				return fmt.Errorf("resolving channel: %w", err)
 			}
 			cfg.Channel = chID
+			cfg.ChannelName = "#" + channelName
 		}
 	}
 
 	// If no channel given, prompt with channel list when credentials exist
 	if cfg.Channel == "" {
 		if _, err := pslack.LoadCredentials(); err == nil {
-			cfg.Channel = promptChannel()
+			cfg.Channel, cfg.ChannelName = promptChannel()
 		}
+	}
+
+	// If no topic given, prompt for one
+	if cfg.Topic == "" {
+		fmt.Print("Topic: ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		cfg.Topic = strings.TrimSpace(line)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -183,16 +194,17 @@ func main() {
 }
 
 // promptChannel lists channels and lets the user pick one, or type @username for a DM.
-func promptChannel() string {
+// Returns (channelID, displayName).
+func promptChannel() (string, string) {
 	client, err := pslack.New("")
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
 	channels, err := client.ListChannels(slackProgress)
 	fmt.Fprint(os.Stderr, "\r\033[K")
 	if err != nil || len(channels) == 0 {
-		return ""
+		return "", ""
 	}
 
 	fmt.Println("Pick a channel (or type @username for a DM):")
@@ -208,7 +220,7 @@ func promptChannel() string {
 	line, _ := reader.ReadString('\n')
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return ""
+		return "", ""
 	}
 
 	// @username → resolve to DM channel
@@ -216,9 +228,9 @@ func promptChannel() string {
 		chID, err := client.ResolveUserChannel(line)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return ""
+			return "", ""
 		}
-		return chID
+		return chID, "@" + strings.TrimPrefix(line, "@")
 	}
 
 	idx := 0
@@ -226,9 +238,14 @@ func promptChannel() string {
 	idx--
 	if idx < 0 || idx >= len(channels) {
 		fmt.Fprintf(os.Stderr, "Invalid choice\n")
-		return ""
+		return "", ""
 	}
-	return channels[idx].ID
+	ch := channels[idx]
+	name := ch.Name
+	if ch.Type == "channel" || ch.Type == "group" {
+		name = "#" + name
+	}
+	return ch.ID, name
 }
 
 func runAuthManual() error {

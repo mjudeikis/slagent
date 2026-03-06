@@ -169,7 +169,11 @@ const maxBlockTextLen = 3000
 
 // StartThread posts the thread parent message and returns the thread URL.
 func (c *Client) StartThread(topic string) (string, error) {
-	headerText := slackapi.NewTextBlockObject("plain_text", fmt.Sprintf("📋 Planning session: %s", topic), true, false)
+	title := "📋 Planning session"
+	if topic != "" {
+		title = fmt.Sprintf("📋 %s", topic)
+	}
+	headerText := slackapi.NewTextBlockObject("plain_text", title, true, false)
 	header := slackapi.NewHeaderBlock(headerText)
 
 	_, ts, err := c.api.PostMessage(

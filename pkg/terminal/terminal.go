@@ -41,7 +41,7 @@ func (u *UI) Banner(topic, channel, threadURL string) {
 	}
 	fmt.Println()
 	if channel != "" {
-		fmt.Printf("%sChannel: #%s%s\n", dim, channel, reset)
+		fmt.Printf("%sChannel: %s%s\n", dim, channel, reset)
 	}
 	if threadURL != "" {
 		fmt.Printf("%sThread:  %s%s\n", dim, threadURL, reset)

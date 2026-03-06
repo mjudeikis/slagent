@@ -18,6 +18,7 @@ import (
 type Config struct {
 	Topic          string
 	Channel        string
+	ChannelName    string // display name (e.g. "#general" or "@haarchri")
 	PermissionMode string
 	SystemPrompt   string
 }
@@ -78,11 +79,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// Start Slack thread
 	var threadURL string
 	if sess.slack != nil {
-		topic := cfg.Topic
-		if topic == "" {
-			topic = "Planning session"
-		}
-		url, err := sess.slack.StartThread(topic)
+		url, err := sess.slack.StartThread(cfg.Topic)
 		if err != nil {
 			return fmt.Errorf("start slack thread: %w", err)
 		}
@@ -90,7 +87,11 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	// Print banner
-	ui.Banner(cfg.Topic, cfg.Channel, threadURL)
+	channelDisplay := cfg.ChannelName
+	if channelDisplay == "" {
+		channelDisplay = cfg.Channel
+	}
+	ui.Banner(cfg.Topic, channelDisplay, threadURL)
 
 	// Start Slack poller
 	if sess.slack != nil {
