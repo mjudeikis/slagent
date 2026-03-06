@@ -448,8 +448,8 @@ func (c *Client) ListChannels(progress func(n int)) ([]Channel, error) {
 				lastActivity, _ = strconv.ParseFloat(ch.LastRead, 64)
 			}
 
-			// Skip channels with no activity in 30 days
-			if lastActivity > 0 && lastActivity < cutoff {
+			// Only include channels with known recent activity
+			if lastActivity < cutoff {
 				continue
 			}
 
