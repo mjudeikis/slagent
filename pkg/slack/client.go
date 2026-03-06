@@ -2,7 +2,6 @@
 package slack
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,12 +18,15 @@ import (
 
 // Client wraps the Slack API for pairplan's needs.
 type Client struct {
-	api       *slackapi.Client
-	channel   string
-	threadTS  string // parent message timestamp (thread identifier)
-	lastTS    string // timestamp of last seen reply
-	userCache map[string]string
-	mu        sync.Mutex
+	api        *slackapi.Client
+	httpClient *http.Client
+	token      string
+	cookie     string
+	channel    string
+	threadTS   string // parent message timestamp (thread identifier)
+	lastTS     string // timestamp of last seen reply
+	userCache  map[string]string
+	mu         sync.Mutex
 
 	// Token type and identity
 	tokenType string // "bot", "user", or "session"
@@ -119,18 +121,22 @@ func New(channel string) (*Client, error) {
 	tokenType := creds.EffectiveType()
 
 	// Build slack client options, inject cookie for session tokens
+	httpClient := &http.Client{}
 	var opts []slackapi.Option
 	if creds.Cookie != "" {
 		opts = append(opts, slackapi.OptionHTTPClient(
-			&cookieHTTPClient{inner: &http.Client{}, cookie: creds.Cookie},
+			&cookieHTTPClient{inner: httpClient, cookie: creds.Cookie},
 		))
 	}
 
 	c := &Client{
-		api:       slackapi.New(token, opts...),
-		channel:   channel,
-		userCache: make(map[string]string),
-		tokenType: tokenType,
+		api:        slackapi.New(token, opts...),
+		httpClient: httpClient,
+		token:      token,
+		cookie:     creds.Cookie,
+		channel:    channel,
+		userCache:  make(map[string]string),
+		tokenType:  tokenType,
 	}
 
 	// For user/session tokens, resolve own user ID via auth.test
@@ -437,43 +443,15 @@ func (c *Client) ResolveChannelByName(name string) (string, error) {
 	return "", fmt.Errorf("channel %q not found", name)
 }
 
-// ResolveUserChannel looks up a user by name/display name and opens a DM channel.
+// ResolveUserChannel looks up a user by name and opens a DM channel.
 // The input can be "@username" or just "username".
-// The progress callback receives the number of users checked so far.
-func (c *Client) ResolveUserChannel(name string, progress func(int)) (string, error) {
+func (c *Client) ResolveUserChannel(name string) (string, error) {
 	name = strings.TrimPrefix(name, "@")
 
-	// Paginate users.list, stop as soon as we find a match
-	ctx := context.Background()
-	var userID string
-	checked := 0
-	pager := c.api.GetUsersPaginated(slackapi.GetUsersOptionLimit(200))
-	for {
-		pager, err := pager.Next(ctx)
-		if failedErr := pager.Failure(err); failedErr != nil {
-			return "", fmt.Errorf("list users: %w", failedErr)
-		}
-		if pager.Done(err) {
-			break
-		}
-		for _, u := range pager.Users {
-			if strings.EqualFold(u.Name, name) ||
-				strings.EqualFold(u.Profile.DisplayName, name) ||
-				strings.EqualFold(u.RealName, name) {
-				userID = u.ID
-				break
-			}
-		}
-		checked += len(pager.Users)
-		if progress != nil {
-			progress(checked)
-		}
-		if userID != "" {
-			break
-		}
-	}
-	if userID == "" {
-		return "", fmt.Errorf("user %q not found", name)
+	// Single API call: users.search returns matches instantly
+	userID, err := c.searchUser(name)
+	if err != nil {
+		return "", err
 	}
 
 	// Open a DM conversation with the user
@@ -484,6 +462,54 @@ func (c *Client) ResolveUserChannel(name string, progress func(int)) (string, er
 		return "", fmt.Errorf("open DM with %q: %w", name, err)
 	}
 	return ch.ID, nil
+}
+
+// searchUser calls users.search to find a user by name in a single API call.
+func (c *Client) searchUser(query string) (string, error) {
+	req, err := http.NewRequest("POST", "https://slack.com/api/users.search", strings.NewReader("query="+query))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.cookie != "" {
+		req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.cookie))
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("users.search: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK    bool `json:"ok"`
+		Users []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Profile struct {
+				DisplayName string `json:"display_name"`
+			} `json:"profile"`
+		} `json:"users"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("users.search decode: %w", err)
+	}
+	if !result.OK {
+		return "", fmt.Errorf("users.search: %s", result.Error)
+	}
+
+	// Exact match on name or display_name
+	for _, u := range result.Users {
+		if strings.EqualFold(u.Name, query) || strings.EqualFold(u.Profile.DisplayName, query) {
+			return u.ID, nil
+		}
+	}
+	if len(result.Users) > 0 {
+		return result.Users[0].ID, nil
+	}
+	return "", fmt.Errorf("user %q not found", query)
 }
 
 // PollInterval is the recommended interval between PollReplies calls.
