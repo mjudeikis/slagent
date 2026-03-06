@@ -149,21 +149,38 @@ func Run(ctx context.Context, cfg Config) error {
 func (s *Session) readTurn() error {
 	s.ui.StartResponse()
 	var fullText strings.Builder
+	var thinkingText strings.Builder
 	thinkingShown := false
+
+	// Set up live thinking indicator for Slack
+	var lt *pslack.LiveThinking
+	if s.slack != nil {
+		lt = s.slack.NewLiveThinking()
+	}
 
 	for {
 		evt, err := s.proc.ReadEvent()
 		if err != nil {
+			if lt != nil {
+				lt.Done()
+			}
 			s.ui.EndResponse()
 			return err
 		}
 		if evt == nil {
+			if lt != nil {
+				lt.Done()
+			}
 			s.ui.EndResponse()
 			return fmt.Errorf("unexpected EOF from Claude")
 		}
 
 		switch evt.Type {
 		case "text_delta":
+			// End thinking phase on first text
+			if lt != nil && thinkingShown {
+				lt.Done()
+			}
 			s.ui.StreamText(evt.Text)
 			fullText.WriteString(evt.Text)
 
@@ -171,23 +188,36 @@ func (s *Session) readTurn() error {
 			if !thinkingShown {
 				s.ui.Thinking()
 				thinkingShown = true
+				if lt != nil {
+					go lt.Start()
+				}
+			}
+			thinkingText.WriteString(evt.Text)
+			if lt != nil {
+				go lt.Update(thinkingText.String())
 			}
 
 		case claude.TypeAssistant:
 			// Complete message — we already streamed the text, but record it
 			if fullText.Len() == 0 && evt.Text != "" {
-				// No streaming happened, print the full text
 				s.ui.StreamText(evt.Text)
 				fullText.WriteString(evt.Text)
 			}
 
 		case "tool_use":
+			// End thinking phase if still active
+			if lt != nil && thinkingShown {
+				lt.Done()
+			}
 			s.ui.ToolActivity(evt.ToolName, summarizeToolInput(evt.ToolInput))
 			if s.slack != nil {
 				go s.slack.PostToolActivity(fmt.Sprintf("%s: %s", evt.ToolName, summarizeToolInput(evt.ToolInput)))
 			}
 
 		case claude.TypeResult:
+			if lt != nil {
+				lt.Done()
+			}
 			s.ui.EndResponse()
 
 			// Post complete response to Slack

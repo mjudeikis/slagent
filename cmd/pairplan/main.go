@@ -8,8 +8,9 @@ import (
 	"os/signal"
 	"strings"
 
-	pslack "github.com/sttts/pairplan/pkg/slack"
 	"github.com/sttts/pairplan/pkg/session"
+	pslack "github.com/sttts/pairplan/pkg/slack"
+	"github.com/sttts/pairplan/pkg/slack/extract"
 )
 
 func main() {
@@ -23,6 +24,8 @@ func main() {
 		cmdStart()
 	case "auth":
 		cmdAuth()
+	case "channels":
+		cmdChannels()
 	case "share":
 		cmdShare()
 	case "status":
@@ -79,14 +82,22 @@ func cmdStart() {
 }
 
 func cmdAuth() {
+	// Check for --extract flag
+	for _, arg := range os.Args[2:] {
+		if arg == "--extract" {
+			cmdAuthExtract()
+			return
+		}
+	}
+
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("Slack Bot Token Setup")
+	fmt.Println("Slack Token Setup")
 	fmt.Println(strings.Repeat("─", 40))
 	fmt.Println()
 	fmt.Println("1. Go to https://api.slack.com/apps")
 	fmt.Println("2. Create a new app (or select existing)")
 	fmt.Println("3. Go to 'OAuth & Permissions'")
-	fmt.Println("4. Add these Bot Token Scopes:")
+	fmt.Println("4. Add scopes (Bot or User Token Scopes):")
 	fmt.Println("   - chat:write")
 	fmt.Println("   - channels:history")
 	fmt.Println("   - groups:history")
@@ -94,10 +105,10 @@ func cmdAuth() {
 	fmt.Println("   - groups:read")
 	fmt.Println("   - users:read")
 	fmt.Println("5. Install the app to your workspace")
-	fmt.Println("6. Copy the Bot User OAuth Token (xoxb-...)")
+	fmt.Println("6. Copy the token (xoxb-... for bot, xoxp-... for user)")
 	fmt.Println()
 
-	fmt.Print("Paste your bot token: ")
+	fmt.Print("Paste your token: ")
 	token, err := reader.ReadString('\n')
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
@@ -105,17 +116,28 @@ func cmdAuth() {
 	}
 	token = strings.TrimSpace(token)
 
-	if !strings.HasPrefix(token, "xoxb-") {
-		fmt.Fprintf(os.Stderr, "Warning: token doesn't start with 'xoxb-'. Are you sure this is a bot token?\n")
+	// Determine token type
+	var tokenType string
+	switch {
+	case strings.HasPrefix(token, "xoxb-"):
+		tokenType = "bot"
+	case strings.HasPrefix(token, "xoxp-"):
+		tokenType = "user"
+	default:
+		fmt.Fprintf(os.Stderr, "Warning: token doesn't start with 'xoxb-' or 'xoxp-'.\n")
+		tokenType = "bot"
 	}
 
-	if err := pslack.SaveCredentials(&pslack.Credentials{BotToken: token}); err != nil {
+	creds := &pslack.Credentials{Token: token, Type: tokenType}
+	if err := pslack.SaveCredentials(creds); err != nil {
 		fmt.Fprintf(os.Stderr, "Error saving credentials: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\nCredentials saved to %s\n", pslack.CredentialsPath())
-	fmt.Println("Don't forget to invite the bot to your channel: /invite @your-bot-name")
+	fmt.Printf("\nCredentials saved to %s (%s token)\n", pslack.CredentialsPath(), tokenType)
+	if tokenType == "bot" {
+		fmt.Println("Don't forget to invite the bot to your channel: /invite @your-bot-name")
+	}
 }
 
 func cmdShare() {
@@ -172,11 +194,85 @@ func cmdStatus() {
 	if err != nil {
 		fmt.Println("Slack: not configured (run 'pairplan auth')")
 	} else {
-		token := creds.BotToken
+		token := creds.EffectiveToken()
 		if len(token) > 10 {
 			token = token[:10]
 		}
-		fmt.Printf("Slack: configured (token: %s...)\n", token)
+		fmt.Printf("Slack: configured (%s token: %s...)\n", creds.EffectiveType(), token)
+	}
+}
+
+func cmdAuthExtract() {
+	fmt.Println("Extracting Slack credentials from desktop app...")
+	fmt.Println("(you may see a macOS keychain access prompt — please allow access)")
+	fmt.Println()
+
+	result, err := extract.Extract()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Choose workspace
+	var ws extract.Workspace
+	if len(result.Workspaces) == 1 {
+		ws = result.Workspaces[0]
+		fmt.Printf("Found workspace: %s (%s)\n", ws.Name, ws.URL)
+	} else {
+		fmt.Println("Found workspaces:")
+		for i, w := range result.Workspaces {
+			fmt.Printf("  %d) %s (%s)\n", i+1, w.Name, w.URL)
+		}
+		fmt.Print("\nChoose workspace [1]: ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		idx := 0
+		if line != "" {
+			fmt.Sscanf(line, "%d", &idx)
+			idx--
+		}
+		if idx < 0 || idx >= len(result.Workspaces) {
+			idx = 0
+		}
+		ws = result.Workspaces[idx]
+	}
+
+	creds := &pslack.Credentials{
+		Token:  ws.Token,
+		Type:   "session",
+		Cookie: result.Cookie,
+	}
+	if err := pslack.SaveCredentials(creds); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	tokenPreview := ws.Token
+	if len(tokenPreview) > 14 {
+		tokenPreview = tokenPreview[:14]
+	}
+	fmt.Printf("\nCredentials saved for %s (token: %s...)\n", ws.Name, tokenPreview)
+	fmt.Printf("Credentials file: %s\n", pslack.CredentialsPath())
+}
+
+func cmdChannels() {
+	client, err := pslack.New("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	channels, err := client.ListChannels()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing channels: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("%-14s  %-8s  %s\n", "ID", "TYPE", "NAME")
+	fmt.Println(strings.Repeat("─", 50))
+	for _, ch := range channels {
+		fmt.Printf("%-14s  %-8s  %s\n", ch.ID, ch.Type, ch.Name)
 	}
 }
 
@@ -188,7 +284,13 @@ Usage:
       Start a planning session. Mirrors to Slack if --channel is given.
 
   pairplan auth
-      Set up Slack bot token.
+      Set up Slack token (paste xoxb-/xoxp- token).
+
+  pairplan auth --extract
+      Auto-extract session token from local Slack desktop app.
+
+  pairplan channels
+      List accessible Slack channels (shows IDs for private groups).
 
   pairplan share <plan-file> --channel C
       Post a plan file to Slack for review.

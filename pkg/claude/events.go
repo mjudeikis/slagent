@@ -115,6 +115,7 @@ func ParseEvent(line []byte) (*Event, error) {
 				evt.Text = d.Text
 			case DeltaThinking:
 				evt.Type = "thinking"
+				evt.Text = d.Text
 			case DeltaSignature:
 				evt.Type = "signature"
 			default:

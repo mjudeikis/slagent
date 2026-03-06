@@ -4,8 +4,10 @@ package slack
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,11 +22,53 @@ type Client struct {
 	lastTS    string // timestamp of last seen reply
 	userCache map[string]string
 	mu        sync.Mutex
+
+	// Token type and identity
+	tokenType string // "bot", "user", or "session"
+	ownUserID string // set via auth.test for user/session tokens
 }
 
-// Credentials holds the stored Slack bot token.
+// Credentials holds the stored Slack token.
 type Credentials struct {
-	BotToken string `json:"bot_token"`
+	Token    string `json:"token,omitempty"`
+	Type     string `json:"type,omitempty"`       // "bot", "user", or "session"
+	Cookie   string `json:"cookie,omitempty"`      // xoxd-... for xoxc session tokens
+	BotToken string `json:"bot_token,omitempty"`   // backwards compat
+}
+
+// cookieHTTPClient wraps http.Client and injects the d= cookie on every request.
+type cookieHTTPClient struct {
+	inner  *http.Client
+	cookie string
+}
+
+func (c *cookieHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.cookie))
+	return c.inner.Do(req)
+}
+
+// EffectiveToken returns the token to use, preferring Token over BotToken.
+func (c *Credentials) EffectiveToken() string {
+	if c.Token != "" {
+		return c.Token
+	}
+	return c.BotToken
+}
+
+// EffectiveType returns the token type, inferring from prefix if not set.
+func (c *Credentials) EffectiveType() string {
+	if c.Type != "" {
+		return c.Type
+	}
+	token := c.EffectiveToken()
+	switch {
+	case strings.HasPrefix(token, "xoxp-"):
+		return "user"
+	case strings.HasPrefix(token, "xoxc-"):
+		return "session"
+	default:
+		return "bot"
+	}
 }
 
 // CredentialsPath returns the path to the credentials file.
@@ -43,8 +87,8 @@ func LoadCredentials() (*Credentials, error) {
 	if err := json.Unmarshal(data, &creds); err != nil {
 		return nil, fmt.Errorf("parse credentials: %w", err)
 	}
-	if creds.BotToken == "" {
-		return nil, fmt.Errorf("empty bot token (run 'pairplan auth')")
+	if creds.EffectiveToken() == "" {
+		return nil, fmt.Errorf("empty token (run 'pairplan auth')")
 	}
 	return &creds, nil
 }
@@ -68,29 +112,61 @@ func New(channel string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{
-		api:       slackapi.New(creds.BotToken),
+	token := creds.EffectiveToken()
+	tokenType := creds.EffectiveType()
+
+	// Build slack client options, inject cookie for session tokens
+	var opts []slackapi.Option
+	if creds.Cookie != "" {
+		opts = append(opts, slackapi.OptionHTTPClient(
+			&cookieHTTPClient{inner: &http.Client{}, cookie: creds.Cookie},
+		))
+	}
+
+	c := &Client{
+		api:       slackapi.New(token, opts...),
 		channel:   channel,
 		userCache: make(map[string]string),
-	}, nil
+		tokenType: tokenType,
+	}
+
+	// For user/session tokens, resolve own user ID via auth.test
+	if tokenType == "user" || tokenType == "session" {
+		resp, err := c.api.AuthTest()
+		if err != nil {
+			return nil, fmt.Errorf("auth.test: %w", err)
+		}
+		c.ownUserID = resp.UserID
+	}
+	return c, nil
 }
 
 // NewWithToken creates a Slack client with an explicit token.
 func NewWithToken(token, channel string) *Client {
+	tokenType := "bot"
+	if strings.HasPrefix(token, "xoxp-") {
+		tokenType = "user"
+	}
 	return &Client{
 		api:       slackapi.New(token),
 		channel:   channel,
 		userCache: make(map[string]string),
+		tokenType: tokenType,
 	}
 }
 
+// maxBlockTextLen is the maximum text length for a single Slack Section block.
+const maxBlockTextLen = 3000
+
 // StartThread posts the thread parent message and returns the thread URL.
 func (c *Client) StartThread(topic string) (string, error) {
-	text := fmt.Sprintf(":clipboard: *Planning session: %s*", topic)
+	headerText := slackapi.NewTextBlockObject("plain_text", fmt.Sprintf("📋 Planning session: %s", topic), true, false)
+	header := slackapi.NewHeaderBlock(headerText)
 
 	_, ts, err := c.api.PostMessage(
 		c.channel,
-		slackapi.MsgOptionText(text, false),
+		slackapi.MsgOptionBlocks(header),
+		slackapi.MsgOptionText(fmt.Sprintf("Planning session: %s", topic), false),
 	)
 	if err != nil {
 		return "", fmt.Errorf("post thread parent: %w", err)
@@ -107,28 +183,75 @@ func (c *Client) StartThread(topic string) (string, error) {
 		Ts:      ts,
 	})
 	if err != nil {
-		// Non-fatal: we still have the thread
 		return fmt.Sprintf("(thread started, permalink unavailable: %v)", err), nil
 	}
 	return link, nil
 }
 
-// PostClaudeMessage posts Claude's response to the thread.
+// PostClaudeMessage posts Claude's response to the thread with auto-split.
 func (c *Client) PostClaudeMessage(text string) error {
 	if c.threadTS == "" {
 		return fmt.Errorf("no active thread")
 	}
-	msg := fmt.Sprintf(":robot_face: %s", text)
-	// Truncate if too long for Slack (max ~40k chars, we use 4000 as a sane limit)
-	if len(msg) > 4000 {
-		msg = msg[:3990] + "\n_(truncated)_"
+
+	// Short message: single Section block
+	if len(text) <= maxBlockTextLen {
+		msg := fmt.Sprintf("🤖 %s", text)
+		section := slackapi.NewSectionBlock(
+			slackapi.NewTextBlockObject("mrkdwn", msg, false, false),
+			nil, nil,
+		)
+		_, _, err := c.api.PostMessage(
+			c.channel,
+			slackapi.MsgOptionBlocks(section),
+			slackapi.MsgOptionText(msg, false),
+			slackapi.MsgOptionTS(c.threadTS),
+		)
+		return err
 	}
-	_, _, err := c.api.PostMessage(
-		c.channel,
-		slackapi.MsgOptionText(msg, false),
-		slackapi.MsgOptionTS(c.threadTS),
-	)
-	return err
+
+	// Long message: split at line boundaries, each chunk in a code block
+	chunks := splitAtLines(text, maxBlockTextLen-20) // leave room for ``` markers
+	for _, chunk := range chunks {
+		wrapped := fmt.Sprintf("```\n%s\n```", chunk)
+		section := slackapi.NewSectionBlock(
+			slackapi.NewTextBlockObject("mrkdwn", wrapped, false, false),
+			nil, nil,
+		)
+		_, _, err := c.api.PostMessage(
+			c.channel,
+			slackapi.MsgOptionBlocks(section),
+			slackapi.MsgOptionText(chunk, false),
+			slackapi.MsgOptionTS(c.threadTS),
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// splitAtLines splits text into chunks of at most maxLen bytes at line boundaries.
+func splitAtLines(text string, maxLen int) []string {
+	var chunks []string
+	for len(text) > 0 {
+		if len(text) <= maxLen {
+			chunks = append(chunks, text)
+			break
+		}
+
+		// Find last newline within maxLen
+		cut := strings.LastIndex(text[:maxLen], "\n")
+		if cut <= 0 {
+			// No newline found, hard-cut at maxLen
+			cut = maxLen
+		} else {
+			cut++ // include the newline
+		}
+		chunks = append(chunks, text[:cut])
+		text = text[cut:]
+	}
+	return chunks
 }
 
 // PostUserMessage posts the local user's message to the thread.
@@ -136,10 +259,18 @@ func (c *Client) PostUserMessage(user, text string) error {
 	if c.threadTS == "" {
 		return fmt.Errorf("no active thread")
 	}
-	msg := fmt.Sprintf(":bust_in_silhouette: @%s: %s", user, text)
+
+	ctx := slackapi.NewContextBlock("",
+		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("👤 @%s", user), false, false),
+	)
+	section := slackapi.NewSectionBlock(
+		slackapi.NewTextBlockObject("mrkdwn", text, false, false),
+		nil, nil,
+	)
 	_, _, err := c.api.PostMessage(
 		c.channel,
-		slackapi.MsgOptionText(msg, false),
+		slackapi.MsgOptionBlocks(ctx, section),
+		slackapi.MsgOptionText(fmt.Sprintf("@%s: %s", user, text), false),
 		slackapi.MsgOptionTS(c.threadTS),
 	)
 	return err
@@ -150,10 +281,14 @@ func (c *Client) PostToolActivity(summary string) error {
 	if c.threadTS == "" {
 		return fmt.Errorf("no active thread")
 	}
-	msg := fmt.Sprintf(":wrench: %s", summary)
+
+	ctx := slackapi.NewContextBlock("",
+		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("🔧 %s", summary), false, false),
+	)
 	_, _, err := c.api.PostMessage(
 		c.channel,
-		slackapi.MsgOptionText(msg, false),
+		slackapi.MsgOptionBlocks(ctx),
+		slackapi.MsgOptionText(fmt.Sprintf("🔧 %s", summary), false),
 		slackapi.MsgOptionTS(c.threadTS),
 	)
 	return err
@@ -164,9 +299,16 @@ func (c *Client) PostSessionEnd() error {
 	if c.threadTS == "" {
 		return nil
 	}
+
+	section := slackapi.NewSectionBlock(
+		slackapi.NewTextBlockObject("mrkdwn", "✅ Planning session ended.", false, false),
+		nil, nil,
+	)
+	divider := slackapi.NewDividerBlock()
 	_, _, err := c.api.PostMessage(
 		c.channel,
-		slackapi.MsgOptionText(":white_check_mark: Planning session ended.", false),
+		slackapi.MsgOptionBlocks(section, divider),
+		slackapi.MsgOptionText("Planning session ended.", false),
 		slackapi.MsgOptionTS(c.threadTS),
 	)
 	return err
@@ -202,12 +344,20 @@ func (c *Client) PollReplies() ([]Reply, error) {
 
 	var replies []Reply
 	for _, msg := range msgs {
-		// Skip the parent message and our own bot messages
+		// Skip the parent message and already-seen messages
 		if msg.Timestamp == threadTS || msg.Timestamp <= oldest {
 			continue
 		}
-		if msg.BotID != "" {
-			continue
+
+		// Skip our own messages: by UserID for user/session tokens, by BotID for bot tokens
+		if c.tokenType == "user" || c.tokenType == "session" {
+			if msg.User == c.ownUserID {
+				continue
+			}
+		} else {
+			if msg.BotID != "" {
+				continue
+			}
 		}
 
 		user := c.resolveUser(msg.User)
@@ -260,3 +410,128 @@ func (c *Client) resolveUser(userID string) string {
 
 // PollInterval is the recommended interval between PollReplies calls.
 const PollInterval = 3 * time.Second
+
+// Channel represents a Slack channel for listing.
+type Channel struct {
+	ID   string
+	Name string
+	Type string // "channel", "group", "im", "mpim"
+}
+
+// ListChannels returns channels accessible to the authenticated user.
+func (c *Client) ListChannels() ([]Channel, error) {
+	params := &slackapi.GetConversationsParameters{
+		Types: []string{"public_channel", "private_channel", "mpim", "im"},
+		Limit: 200,
+	}
+	var result []Channel
+	for {
+		channels, cursor, err := c.api.GetConversations(params)
+		if err != nil {
+			return nil, fmt.Errorf("get conversations: %w", err)
+		}
+		for _, ch := range channels {
+			chType := "channel"
+			switch {
+			case ch.IsMpIM:
+				chType = "mpim"
+			case ch.IsIM:
+				chType = "im"
+			case ch.IsPrivate:
+				chType = "group"
+			}
+			name := ch.Name
+			if name == "" {
+				name = ch.ID
+			}
+			result = append(result, Channel{ID: ch.ID, Name: name, Type: chType})
+		}
+		if cursor == "" {
+			break
+		}
+		params.Cursor = cursor
+	}
+	return result, nil
+}
+
+// LiveThinking manages a live-updating thinking indicator in Slack.
+type LiveThinking struct {
+	client     *Client
+	ts         string // timestamp of the thinking message
+	lastUpdate time.Time
+	mu         sync.Mutex
+}
+
+// NewLiveThinking creates a LiveThinking tied to the given client.
+func (c *Client) NewLiveThinking() *LiveThinking {
+	return &LiveThinking{client: c}
+}
+
+// Start posts the initial thinking indicator message.
+func (lt *LiveThinking) Start() {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	if lt.client.threadTS == "" {
+		return
+	}
+
+	ctx := slackapi.NewContextBlock("",
+		slackapi.NewTextBlockObject("mrkdwn", "🤔 _thinking..._", false, false),
+	)
+	_, ts, err := lt.client.api.PostMessage(
+		lt.client.channel,
+		slackapi.MsgOptionBlocks(ctx),
+		slackapi.MsgOptionText("thinking...", false),
+		slackapi.MsgOptionTS(lt.client.threadTS),
+	)
+	if err != nil {
+		return
+	}
+	lt.ts = ts
+	lt.lastUpdate = time.Now()
+}
+
+// Update updates the thinking message with accumulated text, throttled to 1/sec.
+func (lt *LiveThinking) Update(text string) {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	if lt.ts == "" {
+		return
+	}
+
+	// Throttle updates to at most once per second
+	if time.Since(lt.lastUpdate) < time.Second {
+		return
+	}
+
+	// Truncate to last ~2000 chars
+	display := text
+	if len(display) > 2000 {
+		display = "…" + display[len(display)-1999:]
+	}
+
+	ctx := slackapi.NewContextBlock("",
+		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("🤔 _thinking..._\n```%s```", display), false, false),
+	)
+	lt.client.api.UpdateMessage(
+		lt.client.channel,
+		lt.ts,
+		slackapi.MsgOptionBlocks(ctx),
+		slackapi.MsgOptionText("thinking...", false),
+	)
+	lt.lastUpdate = time.Now()
+}
+
+// Done deletes the thinking message.
+func (lt *LiveThinking) Done() {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	if lt.ts == "" {
+		return
+	}
+	lt.client.api.DeleteMessage(lt.client.channel, lt.ts)
+	lt.ts = ""
+}
