@@ -1,8 +1,6 @@
 package slagent
 
 import (
-	"fmt"
-	"net/http"
 	"regexp"
 	"strings"
 )
@@ -55,18 +53,4 @@ func splitAtLines(text string, maxLen int) []string {
 		text = text[cut:]
 	}
 	return chunks
-}
-
-// cookieHTTPClient wraps http.Client and injects the d= cookie on every request.
-type cookieHTTPClient struct {
-	inner  *http.Client
-	cookie string
-}
-
-func (c *cookieHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.cookie))
-	if c.inner == nil {
-		return http.DefaultClient.Do(req)
-	}
-	return c.inner.Do(req)
 }

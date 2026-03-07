@@ -8,19 +8,11 @@
 package slagent
 
 import (
+	"fmt"
+	"net/http"
 	"time"
 
 	slackapi "github.com/slack-go/slack"
-)
-
-// Kind describes the semantic type of streamed content.
-type Kind int
-
-const (
-	KindText     Kind = iota // Actual response text (markdown)
-	KindThinking             // Internal reasoning / chain-of-thought
-	KindTool                 // Tool invocation activity
-	KindStatus               // Transient status ("searching...", "compiling...")
 )
 
 // Reply is a message from a thread participant.
@@ -39,7 +31,6 @@ type threadConfig struct {
 	pollInterval      time.Duration
 	bufferSize        int
 	markdownConverter func(string) string
-	cookie            string // xoxd-... for session tokens
 }
 
 func defaultConfig() threadConfig {
@@ -75,11 +66,6 @@ func WithMarkdownConverter(fn func(string) string) ThreadOption {
 	return func(c *threadConfig) { c.markdownConverter = fn }
 }
 
-// WithCookie sets the session cookie for xoxc token authentication.
-func WithCookie(cookie string) ThreadOption {
-	return func(c *threadConfig) { c.cookie = cookie }
-}
-
 // NewSlackClient creates a *slack.Client with optional cookie support.
 func NewSlackClient(token, cookie string) *slackapi.Client {
 	if cookie != "" {
@@ -88,4 +74,18 @@ func NewSlackClient(token, cookie string) *slackapi.Client {
 		))
 	}
 	return slackapi.New(token)
+}
+
+// cookieHTTPClient wraps http.Client and injects the d= cookie on every request.
+type cookieHTTPClient struct {
+	inner  *http.Client
+	cookie string
+}
+
+func (c *cookieHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.cookie))
+	if c.inner == nil {
+		return http.DefaultClient.Do(req)
+	}
+	return c.inner.Do(req)
 }

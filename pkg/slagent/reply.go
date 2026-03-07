@@ -33,6 +33,15 @@ func (t *Thread) PollReplies() ([]Reply, error) {
 	return t.pollOnce()
 }
 
+// advanceLastTS updates lastTS if ts is newer. Must be called without lock held.
+func (t *Thread) advanceLastTS(ts string) {
+	t.mu.Lock()
+	if ts > t.lastTS {
+		t.lastTS = ts
+	}
+	t.mu.Unlock()
+}
+
 // pollOnce fetches new replies from the thread, filtering by permissions and own messages.
 func (t *Thread) pollOnce() ([]Reply, error) {
 	t.mu.Lock()
@@ -66,41 +75,25 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 		ours := t.postedTS[msg.Timestamp]
 		t.mu.Unlock()
 		if ours {
-			t.mu.Lock()
-			if msg.Timestamp > t.lastTS {
-				t.lastTS = msg.Timestamp
-			}
-			t.mu.Unlock()
+			t.advanceLastTS(msg.Timestamp)
 			continue
 		}
 
 		// Skip bot messages
 		if msg.BotID != "" {
-			t.mu.Lock()
-			if msg.Timestamp > t.lastTS {
-				t.lastTS = msg.Timestamp
-			}
-			t.mu.Unlock()
+			t.advanceLastTS(msg.Timestamp)
 			continue
 		}
 
 		// Handle !open / !close commands
 		if t.handleCommand(msg.User, msg.Text) {
-			t.mu.Lock()
-			if msg.Timestamp > t.lastTS {
-				t.lastTS = msg.Timestamp
-			}
-			t.mu.Unlock()
+			t.advanceLastTS(msg.Timestamp)
 			continue
 		}
 
 		// Check authorization
 		if !t.isAuthorized(msg.User) {
-			t.mu.Lock()
-			if msg.Timestamp > t.lastTS {
-				t.lastTS = msg.Timestamp
-			}
-			t.mu.Unlock()
+			t.advanceLastTS(msg.Timestamp)
 			continue
 		}
 
@@ -110,12 +103,7 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 			UserID: msg.User,
 			Text:   msg.Text,
 		})
-
-		t.mu.Lock()
-		if msg.Timestamp > t.lastTS {
-			t.lastTS = msg.Timestamp
-		}
-		t.mu.Unlock()
+		t.advanceLastTS(msg.Timestamp)
 	}
 
 	return replies, nil

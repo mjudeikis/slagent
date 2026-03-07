@@ -6,15 +6,12 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-
-	slackapi "github.com/slack-go/slack"
 )
 
 // nativeTurn implements turnWriter using Slack's native streaming API
 // (chat.startStream / chat.appendStream / chat.stopStream).
 // Requires a bot token (xoxb-*).
 type nativeTurn struct {
-	api      *slackapi.Client
 	token    string
 	channel  string
 	threadTS string
@@ -23,15 +20,16 @@ type nativeTurn struct {
 	bufSize  int
 
 	streamID string // set after startStream
-	textBuf  strings.Builder
+	fullText strings.Builder // accumulated raw text (pre-conversion)
+	flushed  int             // bytes of fullText already flushed
+	thinkBuf strings.Builder // accumulated thinking text
 	started  bool
 
 	mu sync.Mutex
 }
 
-func newNativeTurn(api *slackapi.Client, token, channel, threadTS string, convert func(string) string, posted func(string), bufSize int) *nativeTurn {
+func newNativeTurn(token, channel, threadTS string, convert func(string) string, posted func(string), bufSize int) *nativeTurn {
 	return &nativeTurn{
-		api:      api,
 		token:    token,
 		channel:  channel,
 		threadTS: threadTS,
@@ -55,7 +53,13 @@ func (n *nativeTurn) startStream() error {
 	if err != nil {
 		return fmt.Errorf("chat.startStream: %w", err)
 	}
-	n.streamID = resp["stream_id"].(string)
+
+	streamID, ok := resp["stream_id"].(string)
+	if !ok {
+		return fmt.Errorf("chat.startStream: missing stream_id in response")
+	}
+	n.streamID = streamID
+
 	if ts, ok := resp["message_ts"].(string); ok {
 		n.posted(ts)
 	}
@@ -67,44 +71,70 @@ func (n *nativeTurn) writeText(text string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	n.textBuf.WriteString(text)
+	n.fullText.WriteString(text)
 
-	// Flush when buffer exceeds threshold
-	if n.textBuf.Len() >= n.bufSize {
+	// Flush when unflushed portion exceeds threshold
+	if n.fullText.Len()-n.flushed >= n.bufSize {
 		n.flushText()
 	}
 }
 
-// flushText sends buffered text as a markdown_text chunk. Must be called with lock held.
+// flushText converts and sends the unflushed portion of fullText.
+// Converts the entire accumulated text, then sends only the new portion.
+// Must be called with lock held.
 func (n *nativeTurn) flushText() {
-	if n.textBuf.Len() == 0 {
+	if n.fullText.Len() == n.flushed {
 		return
 	}
 	if err := n.startStream(); err != nil {
 		return
 	}
 
-	n.callAPI("chat.appendStream", map[string]any{
-		"stream_id": n.streamID,
-		"channel":   n.channel,
-		"chunks": []map[string]any{{
-			"type":  "markdown_text",
-			"value": n.convert(n.textBuf.String()),
-		}},
-	})
-	n.textBuf.Reset()
+	// Convert full text to get correct cross-boundary markdown
+	converted := n.convert(n.fullText.String())
+
+	// Send only the portion after what we already flushed
+	// On first flush, send everything; on subsequent, approximate the new chunk
+	// by converting old prefix and taking the diff
+	var chunk string
+	if n.flushed == 0 {
+		chunk = converted
+	} else {
+		oldConverted := n.convert(n.fullText.String()[:n.flushed])
+		if strings.HasPrefix(converted, oldConverted) {
+			chunk = converted[len(oldConverted):]
+		} else {
+			// Conversion changed earlier text (rare); send full reconvert
+			chunk = converted
+		}
+	}
+
+	if chunk != "" {
+		n.callAPI("chat.appendStream", map[string]any{
+			"stream_id": n.streamID,
+			"channel":   n.channel,
+			"chunks": []map[string]any{{
+				"type":  "markdown_text",
+				"value": chunk,
+			}},
+		})
+	}
+	n.flushed = n.fullText.Len()
 }
 
 func (n *nativeTurn) writeThinking(text string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	n.thinkBuf.WriteString(text)
+
 	if err := n.startStream(); err != nil {
 		return
 	}
 
-	// Show last 5 lines
-	lines := strings.Split(text, "\n")
+	// Show last 5 lines of accumulated thinking
+	display := n.thinkBuf.String()
+	lines := strings.Split(display, "\n")
 	if len(lines) > 5 {
 		lines = append([]string{"…"}, lines[len(lines)-5:]...)
 	}
@@ -185,7 +215,6 @@ func (n *nativeTurn) finish() error {
 	defer n.mu.Unlock()
 
 	if !n.started {
-		// Nothing was streamed
 		return nil
 	}
 

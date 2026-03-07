@@ -108,7 +108,7 @@ func (t *Thread) NewTurn() Turn {
 	// Select backend based on token type
 	var w turnWriter
 	if isNativeToken(t.token) {
-		w = newNativeTurn(t.api, t.token, t.channel, threadTS, t.config.markdownConverter, posted, t.config.bufferSize)
+		w = newNativeTurn(t.token, t.channel, threadTS, t.config.markdownConverter, posted, t.config.bufferSize)
 	} else {
 		w = newCompatTurn(t.api, t.channel, threadTS, t.config.markdownConverter, posted)
 	}
