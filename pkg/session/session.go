@@ -12,17 +12,18 @@ import (
 	"time"
 
 	"github.com/sttts/pairplan/pkg/claude"
+	"github.com/sttts/pairplan/pkg/slagent"
 	pslack "github.com/sttts/pairplan/pkg/slack"
 	"github.com/sttts/pairplan/pkg/terminal"
 )
 
 // Config holds session configuration.
 type Config struct {
-	Topic          string
-	Channel        string
-	ChannelName    string // display name (e.g. "#general" or "@haarchri")
-	PermissionMode string
-	SystemPrompt   string
+	Topic           string
+	Channel         string
+	ChannelName     string // display name (e.g. "#general" or "@haarchri")
+	PermissionMode  string
+	SystemPrompt    string
 	ResumeSessionID string // Claude session ID to resume
 	ResumeThreadTS  string // Slack thread timestamp to resume
 }
@@ -36,14 +37,14 @@ type ResumeInfo struct {
 
 // Session is a running pairplan planning session.
 type Session struct {
-	cfg   Config
-	ui    *terminal.UI
-	proc  *claude.Process
-	slack *pslack.Client
+	cfg    Config
+	ui     *terminal.UI
+	proc   *claude.Process
+	thread *slagent.Thread
 
 	// Slack reply queue: replies collected between turns
 	replyMu     sync.Mutex
-	replies     []pslack.Reply
+	replies     []slagent.Reply
 	replyNotify chan struct{} // signaled when new replies arrive
 }
 
@@ -62,16 +63,17 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 
 	// Set up Slack if channel is specified
 	if cfg.Channel != "" {
-		slackClient, err := pslack.New(cfg.Channel)
+		creds, err := pslack.LoadCredentials()
 		if err != nil {
-			return nil, fmt.Errorf("slack: %w", err)
+			return nil, fmt.Errorf("slack credentials: %w", err)
 		}
-		sess.slack = slackClient
+		client := slagent.NewSlackClient(creds.EffectiveToken(), creds.Cookie)
+		sess.thread = slagent.NewThread(client, creds.EffectiveToken(), cfg.Channel)
 	}
 
 	// Build system prompt with team feedback framing
 	systemPrompt := cfg.SystemPrompt
-	if sess.slack != nil {
+	if sess.thread != nil {
 		extra := "\n\nYou are in a collaborative planning session. " +
 			"Messages prefixed with [Team feedback from Slack] contain input from team members " +
 			"in a Slack thread. Consider their feedback and incorporate it into the plan."
@@ -98,12 +100,12 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 
 	// Resume or start Slack thread
 	var threadURL string
-	if sess.slack != nil {
+	if sess.thread != nil {
 		if cfg.ResumeThreadTS != "" {
-			sess.slack.ResumeThread(cfg.ResumeThreadTS)
+			sess.thread.Resume(cfg.ResumeThreadTS)
 			threadURL = "(resumed)"
 		} else {
-			url, err := sess.slack.StartThread(cfg.Topic)
+			url, err := sess.thread.Start(cfg.Topic)
 			if err != nil {
 				return nil, fmt.Errorf("start slack thread: %w", err)
 			}
@@ -124,9 +126,9 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 
 	// Send initial topic (skip on resume — Claude already has context)
 	if cfg.ResumeSessionID == "" {
-		if sess.slack != nil {
+		if sess.thread != nil {
 			username := currentUser()
-			go sess.slack.PostUserMessage(username, cfg.Topic)
+			sess.thread.PostUser(username, cfg.Topic)
 		}
 		if err := proc.Send(cfg.Topic); err != nil {
 			return nil, fmt.Errorf("send topic: %w", err)
@@ -137,7 +139,7 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	}
 
 	// Without Slack, we're done after the initial response
-	if sess.slack == nil {
+	if sess.thread == nil {
 		return nil, nil
 	}
 
@@ -180,7 +182,7 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	resume := &ResumeInfo{
 		SessionID: proc.SessionID(),
 		Channel:   cfg.Channel,
-		ThreadTS:  sess.slack.ThreadTS(),
+		ThreadTS:  sess.thread.ThreadTS(),
 	}
 
 	return resume, nil
@@ -190,29 +192,26 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 func (s *Session) readTurn() error {
 	s.ui.StartResponse()
 	var fullText strings.Builder
-	var thinkingText strings.Builder
-	thinkingShown := false
+	toolSeq := 0
 
-	// Set up live indicators for Slack
-	var status *pslack.LiveStatus
-	var resp *pslack.LiveResponse
-	if s.slack != nil {
-		status = s.slack.NewLiveStatus()
-		resp = s.slack.NewLiveResponse()
+	// Set up slagent turn for Slack streaming
+	var turn slagent.Turn
+	if s.thread != nil {
+		turn = s.thread.NewTurn()
 	}
 
 	for {
 		evt, err := s.proc.ReadEvent()
 		if err != nil {
-			if status != nil {
-				status.Done()
+			if turn != nil {
+				turn.Finish()
 			}
 			s.ui.EndResponse()
 			return err
 		}
 		if evt == nil {
-			if status != nil {
-				status.Done()
+			if turn != nil {
+				turn.Finish()
 			}
 			s.ui.EndResponse()
 			return fmt.Errorf("unexpected EOF from Claude")
@@ -220,30 +219,20 @@ func (s *Session) readTurn() error {
 
 		switch evt.Type {
 		case "text_delta":
-			// End status indicator on first text
-			if status != nil {
-				status.Done()
-				status = nil
-			}
 			s.ui.StreamText(evt.Text)
 			fullText.WriteString(evt.Text)
 
-			// Stream to Slack
-			if resp != nil {
-				go resp.Update(fullText.String())
+			// Stream delta to Slack
+			if turn != nil {
+				turn.Text(evt.Text)
 			}
 
 		case "thinking":
-			if !thinkingShown {
-				s.ui.Thinking()
-				thinkingShown = true
-				if status != nil {
-					go status.StartThinking()
-				}
-			}
-			thinkingText.WriteString(evt.Text)
-			if status != nil {
-				go status.UpdateThinking(thinkingText.String())
+			s.ui.Thinking()
+
+			// Stream thinking to Slack
+			if turn != nil {
+				turn.Thinking(evt.Text)
 			}
 
 		case claude.TypeAssistant:
@@ -254,22 +243,18 @@ func (s *Session) readTurn() error {
 			}
 
 		case "tool_use":
+			toolSeq++
+			toolID := fmt.Sprintf("t%d", toolSeq)
 			summary := formatTool(evt.ToolName, evt.ToolInput)
 			s.ui.ToolActivity(summary)
-			if status != nil {
-				go status.UpdateTool(summary)
+			if turn != nil {
+				turn.Tool(toolID, evt.ToolName, slagent.ToolRunning, summary)
 			}
 
 		case claude.TypeResult:
-			if status != nil {
-				status.Done()
-			}
 			s.ui.EndResponse()
-
-			// Replace streaming message with final split response
-			text := fullText.String()
-			if resp != nil && text != "" {
-				go resp.Finish(text)
+			if turn != nil {
+				turn.Finish()
 			}
 			return nil
 
@@ -280,7 +265,7 @@ func (s *Session) readTurn() error {
 }
 
 // waitForReplies blocks until Slack replies are available or context is cancelled.
-func (s *Session) waitForReplies(ctx context.Context) ([]pslack.Reply, bool) {
+func (s *Session) waitForReplies(ctx context.Context) ([]slagent.Reply, bool) {
 	select {
 	case <-ctx.Done():
 		return nil, false
@@ -295,7 +280,7 @@ func (s *Session) waitForReplies(ctx context.Context) ([]pslack.Reply, bool) {
 
 // pollSlack continuously polls for new Slack thread replies.
 func (s *Session) pollSlack(ctx context.Context) {
-	ticker := time.NewTicker(pslack.PollInterval)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -303,7 +288,7 @@ func (s *Session) pollSlack(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			replies, err := s.slack.PollReplies()
+			replies, err := s.thread.PollReplies()
 			if err != nil {
 				continue
 			}

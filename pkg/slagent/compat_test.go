@@ -20,20 +20,21 @@ func TestCompatTurnTextStreaming(t *testing.T) {
 		t.Fatalf("Finish: %v", err)
 	}
 
-	// After finish: streaming msg deleted, final msg posted
+	// After finish: text message updated to full content, not deleted
 	active := mock.activeMessages()
 	if len(active) == 0 {
 		t.Fatal("no active messages after Finish")
 	}
 
-	// The final message should contain the converted text
-	last := active[len(active)-1]
-	if last.Text == "" {
-		t.Error("final message has empty text")
+	// No messages should be deleted
+	for _, m := range mock.postedMessages() {
+		if m.Deleted {
+			t.Error("no messages should be deleted")
+		}
 	}
 }
 
-func TestCompatTurnThinking(t *testing.T) {
+func TestCompatTurnThinkingNotDeleted(t *testing.T) {
 	mock := newMockSlack()
 	defer mock.close()
 
@@ -45,16 +46,27 @@ func TestCompatTurnThinking(t *testing.T) {
 	turn.Thinking("\nMore thoughts")
 	turn.Finish()
 
-	// Thinking message should be deleted after finish
+	// Activity message should still exist (not deleted)
 	active := mock.activeMessages()
+	found := false
 	for _, m := range active {
-		if m.Text == "thinking..." {
-			t.Error("thinking message should be deleted after finish")
+		if m.Text == "activity" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("activity message should persist after finish")
+	}
+
+	// No deletions
+	for _, m := range mock.postedMessages() {
+		if m.Deleted {
+			t.Error("no messages should be deleted")
 		}
 	}
 }
 
-func TestCompatTurnTools(t *testing.T) {
+func TestCompatTurnUnifiedActivity(t *testing.T) {
 	mock := newMockSlack()
 	defer mock.close()
 
@@ -62,40 +74,73 @@ func TestCompatTurnTools(t *testing.T) {
 	thread.Resume("1700000001.000000")
 
 	turn := thread.NewTurn()
+	turn.Thinking("analyzing code")
 	turn.Tool("t1", "Read", "running", "main.go")
-	turn.Tool("t1", "Read", "done", "")
-	turn.Tool("t2", "Write", "running", "out.go")
-	turn.Finish()
-
-	// Tool message should be deleted after finish
-	active := mock.activeMessages()
-	for _, m := range active {
-		if strings.Contains(m.Text, "Tool") && strings.Contains(m.Text, "Read") {
-			t.Error("tool message should be deleted after finish")
-		}
-	}
-}
-
-func TestCompatTurnStatus(t *testing.T) {
-	mock := newMockSlack()
-	defer mock.close()
-
-	thread := NewThread(mock.client(), "xoxc-test", "C_TEST")
-	thread.Resume("1700000001.000000")
-
-	turn := thread.NewTurn()
-
-	// Status replaces previous
-	turn.Status("searching...")
+	turn.Tool("t2", "Grep", "running", "pattern")
 	turn.Status("compiling...")
 	turn.Finish()
 
-	// Both should be cleaned up
+	// All activity should be in ONE message (same TS)
 	active := mock.activeMessages()
+	activityCount := 0
 	for _, m := range active {
-		if m.Text == "searching..." || m.Text == "compiling..." {
-			t.Error("status messages should be deleted after finish")
+		if m.Text == "activity" {
+			activityCount++
 		}
+	}
+	if activityCount != 1 {
+		t.Errorf("expected 1 activity message, got %d", activityCount)
+	}
+
+	// No deletions
+	for _, m := range mock.postedMessages() {
+		if m.Deleted {
+			t.Error("no messages should be deleted")
+		}
+	}
+}
+
+func TestCompatTurnToolIcons(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST")
+	thread.Resume("1700000001.000000")
+
+	turn := thread.NewTurn()
+	impl := turn.(*turnImpl)
+	w := impl.w.(*compatTurn)
+
+	turn.Tool("t1", "Read", "running", "main.go")
+
+	w.mu.Lock()
+	display := w.renderActivity()
+	w.mu.Unlock()
+
+	if !strings.Contains(display, "📄") {
+		t.Error("Read tool should use 📄 icon")
+	}
+}
+
+func TestCompatTurnToolError(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST")
+	thread.Resume("1700000001.000000")
+
+	turn := thread.NewTurn()
+	impl := turn.(*turnImpl)
+	w := impl.w.(*compatTurn)
+
+	turn.Tool("t1", "Bash", ToolError, "go build")
+
+	w.mu.Lock()
+	display := w.renderActivity()
+	w.mu.Unlock()
+
+	if !strings.Contains(display, "❌") {
+		t.Error("error tool should show ❌")
 	}
 }
 
@@ -114,7 +159,7 @@ func TestCompatTurnEmptyFinish(t *testing.T) {
 	}
 }
 
-func TestCompatToolMaxHistory(t *testing.T) {
+func TestCompatActivityMaxLines(t *testing.T) {
 	mock := newMockSlack()
 	defer mock.close()
 
@@ -125,12 +170,57 @@ func TestCompatToolMaxHistory(t *testing.T) {
 	impl := turn.(*turnImpl)
 	w := impl.w.(*compatTurn)
 
-	// Add more than maxToolHistory tools
-	for i := 0; i < 8; i++ {
-		turn.Tool("t"+string(rune('0'+i)), "Tool"+string(rune('0'+i)), "done", "")
+	// Add more than maxDisplayLines activities
+	for i := 0; i < 10; i++ {
+		turn.Tool("t"+string(rune('0'+i)), "Tool", "done", "")
 	}
 
-	if len(w.tools) > maxToolHistory {
-		t.Errorf("tools = %d, want <= %d", len(w.tools), maxToolHistory)
+	w.mu.Lock()
+	display := w.renderActivity()
+	w.mu.Unlock()
+
+	lines := strings.Split(display, "\n")
+	if len(lines) > maxDisplayLines {
+		t.Errorf("activity lines = %d, want <= %d", len(lines), maxDisplayLines)
+	}
+}
+
+func TestCompatTextLastNLines(t *testing.T) {
+	result := lastNLines("line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8", 6)
+	lines := strings.Split(result, "\n")
+	if len(lines) != 6 {
+		t.Errorf("lastNLines returned %d lines, want 6", len(lines))
+	}
+	if lines[0] != "line3" {
+		t.Errorf("first line = %q, want %q", lines[0], "line3")
+	}
+}
+
+func TestCompatFinishUpdatesTextMessage(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST")
+	thread.Resume("1700000001.000000")
+
+	turn := thread.NewTurn()
+	turn.Text("line 1\n")
+	turn.Text("line 2\n")
+	turn.Text("line 3\n")
+	err := turn.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	// The text message should exist and be updated (not deleted + re-posted)
+	active := mock.activeMessages()
+	textMsgFound := false
+	for _, m := range active {
+		if m.Text != "activity" && m.Text != "" && m.IsUpdate {
+			textMsgFound = true
+		}
+	}
+	if !textMsgFound {
+		t.Error("text message should be updated on finish")
 	}
 }

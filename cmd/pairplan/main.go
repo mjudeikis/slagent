@@ -11,6 +11,7 @@ import (
 	"github.com/alecthomas/kong"
 
 	"github.com/sttts/pairplan/pkg/session"
+	"github.com/sttts/pairplan/pkg/slagent"
 	pslack "github.com/sttts/pairplan/pkg/slack"
 	"github.com/sttts/pairplan/pkg/slack/extract"
 )
@@ -44,7 +45,7 @@ func (cmd *StartCmd) Run() error {
 
 	// Resolve --channel name or --user(s) to a channel ID
 	if len(cmd.User) > 0 || (cfg.Channel != "" && !isSlackID(cfg.Channel)) {
-		client, err := pslack.New("")
+		client, err := pslack.New()
 		if err != nil {
 			return err
 		}
@@ -131,7 +132,7 @@ func (cmd *AuthCmd) Run() error {
 type ChannelsCmd struct{}
 
 func (cmd *ChannelsCmd) Run() error {
-	client, err := pslack.New("")
+	client, err := pslack.New()
 	if err != nil {
 		return err
 	}
@@ -164,30 +165,36 @@ func (cmd *ShareCmd) Run() error {
 		return fmt.Errorf("reading %s: %w", cmd.File, err)
 	}
 
+	// Load credentials
+	creds, err := pslack.LoadCredentials()
+	if err != nil {
+		return err
+	}
+
+	// Resolve channel name if needed
 	channel := cmd.Channel
 	if !isSlackID(channel) {
-		client, err := pslack.New("")
+		resolver, err := pslack.New()
 		if err != nil {
 			return err
 		}
-		channel, err = client.ResolveChannelByName(channel)
+		channel, err = resolver.ResolveChannelByName(channel)
 		if err != nil {
 			return fmt.Errorf("resolving channel: %w", err)
 		}
 	}
 
-	client, err := pslack.New(channel)
-	if err != nil {
-		return err
-	}
+	// Use slagent for thread creation and posting
+	client := slagent.NewSlackClient(creds.EffectiveToken(), creds.Cookie)
+	thread := slagent.NewThread(client, creds.EffectiveToken(), channel)
 
 	topic := fmt.Sprintf("Plan review: %s", cmd.File)
-	url, err := client.StartThread(topic)
+	url, err := thread.Start(topic)
 	if err != nil {
 		return err
 	}
 
-	if err := client.PostClaudeMessage(string(content)); err != nil {
+	if err := thread.PostMarkdown(string(content)); err != nil {
 		return fmt.Errorf("posting plan: %w", err)
 	}
 
@@ -229,7 +236,7 @@ func main() {
 // promptChannel lists channels and lets the user pick one, or type @username for a DM.
 // Returns (channelID, displayName).
 func promptChannel() (string, string) {
-	client, err := pslack.New("")
+	client, err := pslack.New()
 	if err != nil {
 		return "", ""
 	}

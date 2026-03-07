@@ -166,6 +166,73 @@ func (t *Thread) PostBlocks(fallback string, blocks ...slackapi.Block) error {
 	return nil
 }
 
+// PostUser posts a user message with context block ("👤 @user") and text section.
+func (t *Thread) PostUser(user, text string) error {
+	t.mu.Lock()
+	threadTS := t.threadTS
+	t.mu.Unlock()
+
+	if threadTS == "" {
+		return fmt.Errorf("no active thread")
+	}
+
+	ctx := slackapi.NewContextBlock("",
+		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("👤 @%s", user), false, false),
+	)
+	section := slackapi.NewSectionBlock(
+		slackapi.NewTextBlockObject("mrkdwn", text, false, false),
+		nil, nil,
+	)
+	_, ts, err := t.api.PostMessage(
+		t.channel,
+		slackapi.MsgOptionBlocks(ctx, section),
+		slackapi.MsgOptionText(fmt.Sprintf("@%s: %s", user, text), false),
+		slackapi.MsgOptionTS(threadTS),
+	)
+	if err != nil {
+		return err
+	}
+
+	t.mu.Lock()
+	t.postedTS[ts] = true
+	t.mu.Unlock()
+	return nil
+}
+
+// PostMarkdown converts markdown to mrkdwn, splits at 3000 chars, and posts as section blocks.
+func (t *Thread) PostMarkdown(text string) error {
+	t.mu.Lock()
+	threadTS := t.threadTS
+	convert := t.config.markdownConverter
+	t.mu.Unlock()
+
+	if threadTS == "" {
+		return fmt.Errorf("no active thread")
+	}
+
+	mrkdwn := convert(text)
+	chunks := splitAtLines(mrkdwn, maxBlockTextLen)
+	for _, chunk := range chunks {
+		section := slackapi.NewSectionBlock(
+			slackapi.NewTextBlockObject("mrkdwn", chunk, false, false),
+			nil, nil,
+		)
+		_, ts, err := t.api.PostMessage(
+			t.channel,
+			slackapi.MsgOptionBlocks(section),
+			slackapi.MsgOptionText(chunk, false),
+			slackapi.MsgOptionTS(threadTS),
+		)
+		if err != nil {
+			return err
+		}
+		t.mu.Lock()
+		t.postedTS[ts] = true
+		t.mu.Unlock()
+	}
+	return nil
+}
+
 // ThreadTS returns the thread timestamp.
 func (t *Thread) ThreadTS() string {
 	t.mu.Lock()
