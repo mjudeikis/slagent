@@ -17,13 +17,11 @@ const (
 
 	hideCursor = "\033[?25l"
 	showCursor = "\033[?25h"
-	clearLine  = "\r\033[K"
 )
 
 // UI provides simple terminal output for pairplan sessions.
 type UI struct {
-	streaming  bool // true while Claude is streaming text
-	onToolLine bool // true when cursor is on an in-place tool activity line
+	streaming bool // true while Claude is streaming text
 }
 
 // New creates a new terminal UI.
@@ -50,20 +48,17 @@ func (u *UI) Banner(topic, channel, threadURL string) {
 
 // StartResponse begins a Claude response block.
 func (u *UI) StartResponse() {
-	u.clearToolLine()
 	fmt.Printf("%s%s🤖 Claude:%s ", bold, green, reset)
 	u.streaming = true
 }
 
 // StreamText appends streaming text from Claude. Printed inline.
 func (u *UI) StreamText(text string) {
-	u.clearToolLine()
 	fmt.Print(text)
 }
 
 // EndResponse finishes a Claude response block.
 func (u *UI) EndResponse() {
-	u.clearToolLine()
 	if u.streaming {
 		fmt.Println()
 		u.streaming = false
@@ -71,23 +66,17 @@ func (u *UI) EndResponse() {
 	fmt.Println()
 }
 
-// ToolActivity shows a brief tool use notification, updating in-place.
+// ToolActivity shows a brief tool use notification.
 func (u *UI) ToolActivity(summary string) {
-	fmt.Printf("%s  %s%s%s", clearLine, dim, summary, reset)
-	u.onToolLine = true
-}
-
-// clearToolLine clears the in-place tool activity line if active.
-func (u *UI) clearToolLine() {
-	if u.onToolLine {
-		fmt.Print(clearLine)
-		u.onToolLine = false
+	if u.streaming {
+		fmt.Println()
+		u.streaming = false
 	}
+	fmt.Printf("  %s%s%s\n", dim, summary, reset)
 }
 
 // SlackMessage shows a message received from Slack.
 func (u *UI) SlackMessage(user, text string) {
-	u.clearToolLine()
 	fmt.Printf("  %s💬 @%s:%s %s\n", cyan, user, reset, text)
 }
 
@@ -103,18 +92,24 @@ func (u *UI) ShowCursor() {
 
 // Info prints a dim informational line.
 func (u *UI) Info(msg string) {
-	u.clearToolLine()
 	fmt.Printf("%s%s%s\n", dim, msg, reset)
 }
 
 // Error prints an error.
 func (u *UI) Error(msg string) {
-	u.clearToolLine()
 	fmt.Printf("%s%s❌ Error: %s%s\n", bold, red, msg, reset)
 }
 
-// Thinking shows a thinking indicator, updating in-place.
-func (u *UI) Thinking() {
-	fmt.Printf("%s  %s💭 thinking...%s", clearLine, dim, reset)
-	u.onToolLine = true
+// Thinking shows a thinking line with content.
+func (u *UI) Thinking(text string) {
+	if u.streaming {
+		fmt.Println()
+		u.streaming = false
+	}
+	// Show the actual thinking content, trimmed
+	line := strings.TrimRight(text, "\n")
+	if line == "" {
+		return
+	}
+	fmt.Printf("  %s💭 %s%s\n", dim, line, reset)
 }
