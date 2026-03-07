@@ -29,6 +29,8 @@ type mockMessage struct {
 	IsUpdate bool
 	Deleted  bool
 	TS       string
+	User     string
+	BotID    string
 }
 
 type mockStream struct {
@@ -75,6 +77,11 @@ func (m *mockSlack) client() *slackapi.Client {
 // botClient returns a slack-go client with a bot token.
 func (m *mockSlack) botClient() *slackapi.Client {
 	return slackapi.New("xoxb-test-token", slackapi.OptionAPIURL(m.server.URL+"/api/"))
+}
+
+// apiURL returns the base API URL for native turn testing.
+func (m *mockSlack) apiURL() string {
+	return m.server.URL + "/api/"
 }
 
 func (m *mockSlack) nextTS() string {
@@ -203,11 +210,15 @@ func (m *mockSlack) handleConversationReplies(w http.ResponseWriter, r *http.Req
 		if oldest != "" && msg.TS <= oldest {
 			continue
 		}
-		msgs = append(msgs, map[string]any{
+		entry := map[string]any{
 			"ts":   msg.TS,
 			"text": msg.Text,
-			"user": "",
-		})
+			"user": msg.User,
+		}
+		if msg.BotID != "" {
+			entry["bot_id"] = msg.BotID
+		}
+		msgs = append(msgs, entry)
 	}
 	m.mu.Unlock()
 
@@ -316,6 +327,22 @@ func (m *mockSlack) injectReply(channel, threadTS, userID, text string) string {
 		Channel:  channel,
 		ThreadTS: threadTS,
 		Text:     text,
+		User:     userID,
+		TS:       ts,
+	})
+	m.mu.Unlock()
+	return ts
+}
+
+// injectBotReply adds a bot reply message to the mock.
+func (m *mockSlack) injectBotReply(channel, threadTS, botID, text string) string {
+	ts := m.nextTS()
+	m.mu.Lock()
+	m.messages = append(m.messages, mockMessage{
+		Channel:  channel,
+		ThreadTS: threadTS,
+		Text:     text,
+		BotID:    botID,
 		TS:       ts,
 	})
 	m.mu.Unlock()
