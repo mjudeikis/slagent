@@ -18,6 +18,9 @@
 brew tap sttts/slagent https://github.com/sttts/slagent
 brew install sttts/slagent/slaude
 
+# or go install
+go install github.com/sttts/slagent/cmd/slaude@latest
+
 # or build from source
 go build -o slaude ./cmd/slaude/
 ```
