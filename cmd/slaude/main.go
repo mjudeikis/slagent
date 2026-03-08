@@ -17,11 +17,12 @@ import (
 )
 
 var cli struct {
-	Start    StartCmd    `cmd:"" help:"Start a planning session mirrored to Slack."`
-	Auth     AuthCmd     `cmd:"" help:"Set up Slack credentials."`
-	Channels ChannelsCmd `cmd:"" help:"List Slack channels and group DMs."`
-	Share    ShareCmd    `cmd:"" help:"Post a plan file to Slack for review."`
-	Status   StatusCmd   `cmd:"" help:"Show current configuration."`
+	Workspace string      `short:"w" help:"Slack workspace URL (e.g. myteam.slack.com). Uses default if omitted." placeholder:"WORKSPACE"`
+	Start     StartCmd    `cmd:"" help:"Start a planning session mirrored to Slack."`
+	Auth      AuthCmd     `cmd:"" help:"Set up Slack credentials."`
+	Channels  ChannelsCmd `cmd:"" help:"List Slack channels and group DMs."`
+	Share     ShareCmd    `cmd:"" help:"Post a plan file to Slack for review."`
+	Status    StatusCmd   `cmd:"" help:"Show current configuration."`
 }
 
 // StartCmd starts an interactive planning session with Claude Code.
@@ -40,12 +41,13 @@ func (cmd *StartCmd) Run() error {
 		Channel:        cmd.Channel,
 		ResumeThreadTS: cmd.ResumeThread,
 		Debug:          cmd.Debug,
+		Workspace:      cli.Workspace,
 		ClaudeArgs:     cmd.ClaudeArgs,
 	}
 
 	// Resolve --channel name or --user(s) to a channel ID
 	if len(cmd.User) > 0 || (cfg.Channel != "" && !isSlackID(cfg.Channel)) {
-		client, err := channel.New()
+		client, err := channel.New().WithWorkspace(cfg.Workspace).Build()
 		if err != nil {
 			return err
 		}
@@ -75,8 +77,8 @@ func (cmd *StartCmd) Run() error {
 
 	// If no channel given, prompt with channel list when credentials exist
 	if cfg.Channel == "" {
-		if _, err := credential.Load(); err == nil {
-			cfg.Channel, cfg.ChannelName = promptChannel()
+		if _, err := credential.Load(cfg.Workspace); err == nil {
+			cfg.Channel, cfg.ChannelName = promptChannel(cfg.Workspace)
 		}
 	}
 
@@ -142,7 +144,7 @@ func (cmd *AuthCmd) Run() error {
 type ChannelsCmd struct{}
 
 func (cmd *ChannelsCmd) Run() error {
-	client, err := channel.New()
+	client, err := channel.New().WithWorkspace(cli.Workspace).Build()
 	if err != nil {
 		return err
 	}
@@ -176,7 +178,7 @@ func (cmd *ShareCmd) Run() error {
 	}
 
 	// Load credentials
-	creds, err := credential.Load()
+	creds, err := credential.Load(cli.Workspace)
 	if err != nil {
 		return err
 	}
@@ -184,7 +186,7 @@ func (cmd *ShareCmd) Run() error {
 	// Resolve channel name if needed
 	ch := cmd.Channel
 	if !isSlackID(ch) {
-		resolver, err := channel.New()
+		resolver, err := channel.New().WithWorkspace(cli.Workspace).Build()
 		if err != nil {
 			return err
 		}
@@ -218,15 +220,27 @@ type StatusCmd struct{}
 func (cmd *StatusCmd) Run() error {
 	fmt.Println("📊 Status")
 	fmt.Println("  ⏸️  No active session.")
-	creds, err := credential.Load()
-	if err != nil {
+
+	names, defaultName, _ := credential.ListWorkspaces()
+	if len(names) == 0 {
 		fmt.Println("  ❌ Slack: not configured (run 'slaude auth')")
-	} else {
+		return nil
+	}
+
+	for _, name := range names {
+		creds, err := credential.Load(name)
+		if err != nil {
+			continue
+		}
 		token := creds.EffectiveToken()
 		if len(token) > 10 {
 			token = token[:10]
 		}
-		fmt.Printf("  ✅ Slack: configured (%s token: %s...)\n", creds.EffectiveType(), token)
+		marker := "  "
+		if name == defaultName {
+			marker = "* "
+		}
+		fmt.Printf("  %s✅ %s (%s token: %s...)\n", marker, name, creds.EffectiveType(), token)
 	}
 	return nil
 }
@@ -274,8 +288,8 @@ func main() {
 
 // promptChannel lists channels and lets the user pick one, or type @username for a DM.
 // Returns (channelID, displayName).
-func promptChannel() (string, string) {
-	client, err := channel.New()
+func promptChannel(workspace string) (string, string) {
+	client, err := channel.New().WithWorkspace(workspace).Build()
 	if err != nil {
 		return "", ""
 	}
@@ -346,6 +360,17 @@ func runAuthManual() error {
 	fmt.Println("  6️⃣  Copy the token (xoxb-... for bot, xoxp-... for user)")
 	fmt.Println()
 
+	fmt.Print("🏢 Workspace URL (e.g. myteam.slack.com): ")
+	wsURL, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("reading input: %w", err)
+	}
+	wsURL = strings.TrimSpace(wsURL)
+	if wsURL == "" {
+		return fmt.Errorf("workspace URL is required")
+	}
+	key := workspaceKey(wsURL)
+
 	fmt.Print("🔐 Paste your token: ")
 	token, err := reader.ReadString('\n')
 	if err != nil {
@@ -366,11 +391,11 @@ func runAuthManual() error {
 	}
 
 	creds := &credential.Credentials{Token: token, Type: tokenType}
-	if err := credential.Save(creds); err != nil {
+	if err := credential.Save(key, creds); err != nil {
 		return fmt.Errorf("saving credentials: %w", err)
 	}
 
-	fmt.Printf("\n✅ Credentials saved to %s (%s token)\n", credential.Path(), tokenType)
+	fmt.Printf("\n✅ Credentials saved for %s (%s token)\n", key, tokenType)
 	if tokenType == "bot" {
 		fmt.Println("💡 Don't forget to invite the bot to your channel: /invite @your-bot-name")
 	}
@@ -387,47 +412,36 @@ func runAuthExtract() error {
 		return err
 	}
 
-	// Choose workspace
-	var ws credential.Workspace
-	if len(result.Workspaces) == 1 {
-		ws = result.Workspaces[0]
-		fmt.Printf("🏢 Found workspace: %s (%s)\n", ws.Name, ws.URL)
-	} else {
-		fmt.Println("🏢 Found workspaces:")
-		for i, w := range result.Workspaces {
-			fmt.Printf("  %d) %s (%s)\n", i+1, w.Name, w.URL)
+	// Save all found workspaces
+	for _, ws := range result.Workspaces {
+		creds := &credential.Credentials{
+			Token:  ws.Token,
+			Type:   "session",
+			Cookie: result.Cookie,
 		}
-		fmt.Print("\n👉 Choose workspace [1]: ")
-		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		line = strings.TrimSpace(line)
-		idx := 0
-		if line != "" {
-			fmt.Sscanf(line, "%d", &idx)
-			idx--
+		key := workspaceKey(ws.URL)
+		if err := credential.Save(key, creds); err != nil {
+			return fmt.Errorf("saving credentials for %s: %w", ws.Name, err)
 		}
-		if idx < 0 || idx >= len(result.Workspaces) {
-			idx = 0
-		}
-		ws = result.Workspaces[idx]
+		fmt.Printf("  ✅ %s (%s)\n", ws.Name, key)
 	}
 
-	creds := &credential.Credentials{
-		Token:  ws.Token,
-		Type:   "session",
-		Cookie: result.Cookie,
-	}
-	if err := credential.Save(creds); err != nil {
-		return fmt.Errorf("saving credentials: %w", err)
-	}
+	fmt.Printf("\n📁 Credentials file: %s\n", credential.Path())
 
-	tokenPreview := ws.Token
-	if len(tokenPreview) > 14 {
-		tokenPreview = tokenPreview[:14]
+	// Show default
+	_, defaultName, _ := credential.ListWorkspaces()
+	if defaultName != "" {
+		fmt.Printf("⭐ Default workspace: %s\n", defaultName)
 	}
-	fmt.Printf("\n✅ Credentials saved for %s (token: %s...)\n", ws.Name, tokenPreview)
-	fmt.Printf("📁 Credentials file: %s\n", credential.Path())
 	return nil
+}
+
+// workspaceKey extracts "team.slack.com" from a workspace URL.
+func workspaceKey(url string) string {
+	url = strings.TrimPrefix(url, "https://")
+	url = strings.TrimPrefix(url, "http://")
+	url = strings.TrimSuffix(url, "/")
+	return url
 }
 
 // isSlackID returns true if s looks like a Slack channel/user ID (e.g. C01234, G01234, D01234).

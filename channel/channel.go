@@ -43,9 +43,25 @@ func (c *cookieHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return c.inner.Do(req)
 }
 
-// New creates a Slack client from stored credentials for channel/user resolution.
-func New() (*Client, error) {
-	creds, err := credential.Load()
+// Builder configures a channel Client.
+type Builder struct {
+	workspace string
+}
+
+// New returns a Builder for creating a channel Client.
+func New() *Builder {
+	return &Builder{}
+}
+
+// WithWorkspace selects a specific workspace. Empty uses the default.
+func (b *Builder) WithWorkspace(ws string) *Builder {
+	b.workspace = ws
+	return b
+}
+
+// Build creates the Client from stored credentials.
+func (b *Builder) Build() (*Client, error) {
+	creds, err := credential.Load(b.workspace)
 	if err != nil {
 		return nil, err
 	}

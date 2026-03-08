@@ -26,6 +26,7 @@ type Config struct {
 	ChannelName    string   // display name (e.g. "#general" or "@haarchri")
 	ResumeThreadTS string   // Slack thread timestamp to resume
 	Debug          bool     // write raw JSON events to debug.log
+	Workspace      string   // Slack workspace (empty = default)
 	ClaudeArgs     []string // pass-through args for Claude subprocess
 }
 
@@ -88,7 +89,7 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 
 	// Set up Slack if channel is specified
 	if cfg.Channel != "" {
-		creds, err := credential.Load()
+		creds, err := credential.Load(cfg.Workspace)
 		if err != nil {
 			return nil, fmt.Errorf("slack credentials: %w", err)
 		}
