@@ -23,6 +23,7 @@ cmd/slaude/internal/
   session/session.go             — Session orchestration
   claude/process.go, events.go   — Claude subprocess, stream-JSON parsing
   terminal/terminal.go           — Terminal UI
+  perms/server.go, listener.go   — MCP permission server for Slack-based tool approval
 
 cmd/slagent-demo/                — Demo CLI
   main.go
@@ -83,3 +84,29 @@ Module: `github.com/sttts/slagent`
 - Event order: text_delta* → tool_use → text_delta* → result (tool_use comes AFTER text).
 - `interactivePrompt()` returns nil for non-interactive tools; handled in readTurn's switch.
 - Claude args after `--` are passed through to the subprocess. slaude only owns its own flags.
+
+## Permission Approval via MCP
+- Claude Code's `--permission-prompt-tool` delegates permission decisions to an MCP tool.
+- slaude runs a Unix socket listener; Claude starts `slaude _mcp-permissions` as MCP stdio server.
+- Flow: Claude needs permission → MCP tool → Unix socket → slaude posts ✅❌ to Slack → polls owner reaction → returns allow/deny.
+- Allow response MUST include `updatedInput` with original tool input (Claude validates as union type).
+- Deny response MUST include `message`.
+- Permission prompt message is deleted from Slack after approval/denial to keep thread clean.
+- `--mcp-config` expects a file path, not inline JSON. Config written to temp file.
+- Sandbox violations (outside working directory) are blocked by Claude Code before the permission prompt fires.
+
+## Slack Thread Message Ordering (bottom of thread)
+Messages at the end of the thread follow this order:
+1. **Activity message** — `:claude: Tool` / `✓ Tool: detail` (animated, per-turn)
+2. **Tasks message** — TODO list from Claude's TodoWrite/TaskCreate events (persistent, updated across turns, only shown when tasks exist)
+3. **Question/prompt** — `❓` free-text or `🗳️` multi-choice with reaction emojis (optional)
+
+Tasks message is delete+repost on each new turn to stay near the bottom.
+The activity message is managed by Turn (compat backend). Tasks message is managed by Session.
+
+## Task Tracking in Slack
+- Intercept `TodoWrite` and `TaskCreate`/`TaskUpdate` tool_use events from Claude's stream.
+- Maintain task state in Session across turns.
+- Render as a persistent Slack message below activity, above questions.
+- TodoWrite replaces entire list; TaskCreate/TaskUpdate modify individual items.
+- Format: `📋 Tasks\n☐ pending\n⏳ in_progress\n✅ completed`
