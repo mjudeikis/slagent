@@ -144,12 +144,23 @@ func forwardToParent(socketPath string, params *toolCallParams, id int64) (strin
 		return "", fmt.Errorf("read response: %w", err)
 	}
 
-	// Format as the JSON string Claude expects
+	// Format as the JSON string Claude expects.
+	// Allow requires updatedInput (pass through original input).
+	// Deny requires message.
 	result := map[string]interface{}{
 		"behavior": resp.Behavior,
 	}
-	if resp.Message != "" {
-		result["message"] = resp.Message
+	if resp.Behavior == "allow" {
+		// updatedInput is required for allow — pass through the original input
+		var input interface{}
+		json.Unmarshal(params.Arguments.Input, &input)
+		result["updatedInput"] = input
+	} else {
+		msg := resp.Message
+		if msg == "" {
+			msg = "denied"
+		}
+		result["message"] = msg
 	}
 	out, _ := json.Marshal(result)
 	return string(out), nil
