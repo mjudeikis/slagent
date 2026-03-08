@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -26,7 +27,7 @@ type Config struct {
 	SystemPrompt    string
 	ResumeSessionID string // Claude session ID to resume
 	ResumeThreadTS  string // Slack thread timestamp to resume
-	Debug           bool   // print raw JSON events to terminal
+	Debug           bool   // write raw JSON events to debug.log
 }
 
 // ResumeInfo is returned by Run so the caller can print a resume command.
@@ -38,10 +39,11 @@ type ResumeInfo struct {
 
 // Session is a running pairplan planning session.
 type Session struct {
-	cfg    Config
-	ui     *terminal.UI
-	proc   *claude.Process
-	thread *slagent.Thread
+	cfg      Config
+	ui       *terminal.UI
+	proc     *claude.Process
+	thread   *slagent.Thread
+	debugLog *os.File // debug.log file (nil when --debug is off)
 
 	// Slack reply queue: replies collected between turns
 	replyMu     sync.Mutex
@@ -60,6 +62,17 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 		cfg:         cfg,
 		ui:          ui,
 		replyNotify: make(chan struct{}, 1),
+	}
+
+	// Open debug log
+	if cfg.Debug {
+		f, err := os.Create("debug.log")
+		if err != nil {
+			return nil, fmt.Errorf("create debug.log: %w", err)
+		}
+		defer f.Close()
+		sess.debugLog = f
+		ui.Info("📝 Debug log: debug.log (tail -f debug.log)")
 	}
 
 	// Set up Slack if channel is specified
@@ -233,8 +246,8 @@ func (s *Session) readTurn() error {
 			return fmt.Errorf("unexpected EOF from Claude")
 		}
 
-		if s.cfg.Debug {
-			s.ui.Debug(string(evt.RawJSON))
+		if s.debugLog != nil {
+			fmt.Fprintf(s.debugLog, "%s\n", evt.RawJSON)
 		}
 
 		switch evt.Type {
