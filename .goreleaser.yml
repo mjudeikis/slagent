@@ -1,0 +1,38 @@
+version: 2
+
+builds:
+  - id: slaude
+    main: ./cmd/slaude/
+    binary: slaude
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  - id: slagent-demo
+    main: ./cmd/slagent-demo/
+    binary: slagent-demo
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
+
+brews:
+  - name: slaude
+    ids: [slaude]
+    repository:
+      owner: sttts
+      name: homebrew-tap
+    directory: Formula
+    homepage: https://github.com/sttts/slagent
+    description: Claude Code ↔ Slack bridge
+    license: MIT
+    install: |
+      bin.install "slaude"
+
+release:
+  prerelease: auto
