@@ -50,7 +50,7 @@ slaude resume https://team.slack.com/archives/C123/p1234567890#fox -- --resume S
 # DM a user
 slaude start -u alice -- "review this PR"
 
-# Local only (no Slack)
+# No channel? Interactive picker if credentials exist
 slaude start -- "quick question"
 ```
 
