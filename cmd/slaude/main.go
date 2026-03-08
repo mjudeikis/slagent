@@ -412,27 +412,49 @@ func runAuthExtract() error {
 		return err
 	}
 
-	// Save all found workspaces
-	for _, ws := range result.Workspaces {
-		creds := &credential.Credentials{
-			Token:  ws.Token,
-			Type:   "session",
-			Cookie: result.Cookie,
+	// Let user pick a workspace
+	var ws credential.Workspace
+	if len(result.Workspaces) == 1 {
+		ws = result.Workspaces[0]
+		fmt.Printf("🏢 Found workspace: %s (%s)\n", ws.Name, ws.URL)
+	} else {
+		fmt.Println("🏢 Found workspaces:")
+		for i, w := range result.Workspaces {
+			fmt.Printf("  %d) %s (%s)\n", i+1, w.Name, w.URL)
 		}
-		key := workspaceKey(ws.URL)
-		if err := credential.Save(key, creds); err != nil {
-			return fmt.Errorf("saving credentials for %s: %w", ws.Name, err)
+		fmt.Print("\n👉 Choose workspace to add [1]: ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		idx := 0
+		if line != "" {
+			fmt.Sscanf(line, "%d", &idx)
+			idx--
 		}
-		fmt.Printf("  ✅ %s (%s)\n", ws.Name, key)
+		if idx < 0 || idx >= len(result.Workspaces) {
+			idx = 0
+		}
+		ws = result.Workspaces[idx]
 	}
 
-	fmt.Printf("\n📁 Credentials file: %s\n", credential.Path())
+	key := workspaceKey(ws.URL)
+	creds := &credential.Credentials{
+		Token:  ws.Token,
+		Type:   "session",
+		Cookie: result.Cookie,
+	}
+	if err := credential.Save(key, creds); err != nil {
+		return fmt.Errorf("saving credentials: %w", err)
+	}
 
-	// Show default
+	// Check if this became the default
 	_, defaultName, _ := credential.ListWorkspaces()
-	if defaultName != "" {
-		fmt.Printf("⭐ Default workspace: %s\n", defaultName)
+	if defaultName == key {
+		fmt.Printf("\n✅ %s saved as default workspace\n", key)
+	} else {
+		fmt.Printf("\n✅ %s added (use -w %s to select, default: %s)\n", key, key, defaultName)
 	}
+	fmt.Println("💡 Run 'slaude auth' again to add more workspaces.")
 	return nil
 }
 
