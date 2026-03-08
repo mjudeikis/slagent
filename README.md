@@ -50,8 +50,8 @@ slaude resume https://team.slack.com/archives/C123/p1234567890#fox -- --resume S
 # DM a user
 slaude start -u alice -- "review this PR"
 
-# No channel? Interactive picker if credentials exist
-slaude start -- "quick question"
+# No channel? Interactive picker shows available channels
+slaude start -- "refactor the auth module"
 ```
 
 ### Commands
