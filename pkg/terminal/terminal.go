@@ -122,3 +122,12 @@ func (u *UI) Thinking(text string) {
 	}
 	fmt.Fprintf(u.w, "  %s💭 %s%s\n", dim, line, reset)
 }
+
+// Debug prints a raw JSON event line.
+func (u *UI) Debug(line string) {
+	if u.streaming {
+		fmt.Fprintln(u.w)
+		u.streaming = false
+	}
+	fmt.Fprintf(u.w, "  %s🐛 %s%s\n", dim, line, reset)
+}

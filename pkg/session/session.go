@@ -26,6 +26,7 @@ type Config struct {
 	SystemPrompt    string
 	ResumeSessionID string // Claude session ID to resume
 	ResumeThreadTS  string // Slack thread timestamp to resume
+	Debug           bool   // print raw JSON events to terminal
 }
 
 // ResumeInfo is returned by Run so the caller can print a resume command.
@@ -230,6 +231,10 @@ func (s *Session) readTurn() error {
 			}
 			s.ui.EndResponse()
 			return fmt.Errorf("unexpected EOF from Claude")
+		}
+
+		if s.cfg.Debug {
+			s.ui.Debug(string(evt.RawJSON))
 		}
 
 		switch evt.Type {

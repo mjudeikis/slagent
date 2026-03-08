@@ -119,6 +119,10 @@ func (p *Process) ReadEvent() (*Event, error) {
 		return nil, fmt.Errorf("parse event: %w (line: %s)", err, string(line))
 	}
 
+	// Store raw JSON for debug output
+	evt.RawJSON = make([]byte, len(line))
+	copy(evt.RawJSON, line)
+
 	if evt.SessionID != "" {
 		p.sessionID = evt.SessionID
 	}

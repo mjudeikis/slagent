@@ -83,6 +83,7 @@ type Event struct {
 	IsError   bool   // for result
 	SessionID string
 	Raw       *RawEvent
+	RawJSON   []byte // original JSON line (set by ReadEvent)
 }
 
 // ParseEvent converts a JSON line into a high-level Event.

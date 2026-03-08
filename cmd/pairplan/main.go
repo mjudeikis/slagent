@@ -32,6 +32,7 @@ type StartCmd struct {
 	PermissionMode string   `help:"Claude permission mode." default:"plan"`
 	Resume         string   `short:"r" help:"Resume a previous session (session ID)." placeholder:"SESSION_ID"`
 	ResumeThread   string   `help:"Slack thread timestamp to resume." placeholder:"THREAD_TS"`
+	Debug          bool     `help:"Print raw JSON events from Claude to terminal."`
 }
 
 func (cmd *StartCmd) Run() error {
@@ -41,6 +42,7 @@ func (cmd *StartCmd) Run() error {
 		Channel:         cmd.Channel,
 		ResumeSessionID: cmd.Resume,
 		ResumeThreadTS:  cmd.ResumeThread,
+		Debug:           cmd.Debug,
 	}
 
 	// Resolve --channel name or --user(s) to a channel ID
