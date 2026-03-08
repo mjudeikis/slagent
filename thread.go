@@ -303,6 +303,13 @@ func (t *Thread) PollReaction(msgTS string, expected []string) (string, error) {
 	return "", nil
 }
 
+// DeleteMessage deletes a message from the thread.
+func (t *Thread) DeleteMessage(msgTS string) error {
+	t.logSlack("deleteMessage", msgTS)
+	_, _, err := t.api.DeleteMessage(t.channel, msgTS)
+	return err
+}
+
 // OwnerID returns the configured owner user ID.
 func (t *Thread) OwnerID() string {
 	return t.ownerID

@@ -528,15 +528,18 @@ func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.Permissi
 		}
 		switch selected {
 		case "white_check_mark":
+			s.thread.DeleteMessage(msgTS)
 			s.ui.ToolActivity(fmt.Sprintf("✅ Approved: %s: %s", req.ToolName, detail))
 			return &perms.PermissionResponse{Behavior: "allow"}
 		case "x":
+			s.thread.DeleteMessage(msgTS)
 			s.ui.ToolActivity(fmt.Sprintf("❌ Denied: %s: %s", req.ToolName, detail))
 			return &perms.PermissionResponse{Behavior: "deny", Message: "denied by owner via Slack"}
 		}
 	}
 
 	// Timeout — auto-deny
+	s.thread.DeleteMessage(msgTS)
 	s.ui.ToolActivity(fmt.Sprintf("⏰ Timed out: %s: %s", req.ToolName, detail))
 	return &perms.PermissionResponse{Behavior: "deny", Message: "permission request timed out"}
 }
