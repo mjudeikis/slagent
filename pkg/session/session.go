@@ -281,6 +281,13 @@ func (s *Session) readTurn() error {
 				}
 			}
 
+			// Post code diffs/content for Edit and Write tools
+			if s.thread != nil {
+				if block := toolCodeBlock(evt.ToolName, evt.ToolInput); block != "" {
+					s.thread.Post(block)
+				}
+			}
+
 		case claude.TypeResult:
 			finishTool()
 			s.ui.EndResponse()
@@ -429,6 +436,73 @@ func numberEmoji(i int) string {
 		return emojis[i]
 	}
 	return fmt.Sprintf("%d.", i+1)
+}
+
+// toolCodeBlock returns a code-block message for Edit (unified diff) or Write (content preview),
+// or "" if the tool doesn't produce displayable code.
+func toolCodeBlock(toolName, rawInput string) string {
+	var input map[string]interface{}
+	json.Unmarshal([]byte(rawInput), &input)
+
+	str := func(key string) string {
+		if v, ok := input[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+		return ""
+	}
+
+	switch toolName {
+	case "Edit":
+		fp := str("file_path")
+		old := str("old_string")
+		new := str("new_string")
+		if fp == "" || (old == "" && new == "") {
+			return ""
+		}
+		name := filepath.Base(fp)
+
+		// Build unified diff
+		var b strings.Builder
+		fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n", name, name)
+		for _, line := range strings.Split(old, "\n") {
+			fmt.Fprintf(&b, "-%s\n", line)
+		}
+		for _, line := range strings.Split(new, "\n") {
+			fmt.Fprintf(&b, "+%s\n", line)
+		}
+		diff := strings.TrimRight(b.String(), "\n")
+
+		// Escape embedded fences
+		diff = strings.ReplaceAll(diff, "```", "'''")
+		return fmt.Sprintf("📝 %s\n```\n%s\n```", name, diff)
+
+	case "Write":
+		fp := str("file_path")
+		content := str("content")
+		if fp == "" || content == "" {
+			return ""
+		}
+		name := filepath.Base(fp)
+		lines := strings.Split(content, "\n")
+		truncated := false
+		if len(lines) > 15 {
+			lines = lines[:15]
+			truncated = true
+		}
+		preview := strings.Join(lines, "\n")
+		if truncated {
+			preview += "\n..."
+		}
+
+		// Escape embedded fences
+		preview = strings.ReplaceAll(preview, "```", "'''")
+		label := fmt.Sprintf("📝 %s (new, %d lines)", name, len(strings.Split(content, "\n")))
+		return fmt.Sprintf("%s\n```\n%s\n```", label, preview)
+	}
+
+	return ""
 }
 
 // toolDetail extracts the raw detail string for slagent (no emoji).
