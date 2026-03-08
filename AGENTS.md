@@ -27,6 +27,9 @@ cmd/slaude/internal/
 
 cmd/slagent-demo/                — Demo CLI
   main.go
+
+contrib/                         — Project assets
+  logo.png                       — Project logo (update here, not root)
 ```
 
 Module: `github.com/sttts/slagent`
