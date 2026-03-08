@@ -26,7 +26,7 @@ brews:
     ids: [slaude]
     repository:
       owner: sttts
-      name: homebrew-tap
+      name: slagent
     directory: Formula
     homepage: https://github.com/sttts/slagent
     description: Claude Code ↔ Slack bridge
