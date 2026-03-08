@@ -20,6 +20,7 @@ var cli struct {
 	Workspace string      `short:"w" help:"Slack workspace URL (e.g. myteam.slack.com). Uses default if omitted." placeholder:"WORKSPACE"`
 	Start     StartCmd    `cmd:"" help:"Start a planning session mirrored to Slack."`
 	Auth      AuthCmd     `cmd:"" help:"Set up Slack credentials."`
+	Default   DefaultCmd  `cmd:"" help:"Set the default workspace."`
 	Channels  ChannelsCmd `cmd:"" help:"List Slack channels and group DMs."`
 	Share     ShareCmd    `cmd:"" help:"Post a plan file to Slack for review."`
 	Status    StatusCmd   `cmd:"" help:"Show current configuration."`
@@ -138,6 +139,19 @@ func (cmd *AuthCmd) Run() error {
 		return runAuthManual()
 	}
 	return runAuthExtract()
+}
+
+// DefaultCmd sets the default workspace.
+type DefaultCmd struct {
+	Workspace string `arg:"" help:"Workspace URL to set as default (e.g. myteam.slack.com)."`
+}
+
+func (cmd *DefaultCmd) Run() error {
+	if err := credential.SetDefault(cmd.Workspace); err != nil {
+		return err
+	}
+	fmt.Printf("✅ Default workspace: %s\n", cmd.Workspace)
+	return nil
 }
 
 // ChannelsCmd lists accessible Slack channels.
@@ -422,7 +436,7 @@ func runAuthExtract() error {
 		for i, w := range result.Workspaces {
 			fmt.Printf("  %d) %s (%s)\n", i+1, w.Name, w.URL)
 		}
-		fmt.Print("\n👉 Choose workspace to add [1]: ")
+		fmt.Print("\n👉 Extract token for workspace [1]: ")
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
@@ -446,15 +460,19 @@ func runAuthExtract() error {
 	if err := credential.Save(key, creds); err != nil {
 		return fmt.Errorf("saving credentials: %w", err)
 	}
+	fmt.Printf("\n✅ %s added\n", key)
 
-	// Check if this became the default
+	// Ask whether to set as default
 	_, defaultName, _ := credential.ListWorkspaces()
-	if defaultName == key {
-		fmt.Printf("\n✅ %s saved as default workspace\n", key)
-	} else {
-		fmt.Printf("\n✅ %s added (use -w %s to select, default: %s)\n", key, key, defaultName)
+	if defaultName != key {
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Printf("⭐ Set %s as default workspace? [y/N]: ", key)
+		line, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(line)) == "y" {
+			credential.SetDefault(key)
+			fmt.Printf("⭐ Default workspace: %s\n", key)
+		}
 	}
-	fmt.Println("💡 Run 'slaude auth' again to add more workspaces.")
 	return nil
 }
 

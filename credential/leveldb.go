@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf16"
 
@@ -156,6 +157,9 @@ func parseWorkspaces(jsonStr string) ([]Workspace, error) {
 			Token: team.Token,
 		})
 	}
+	sort.Slice(workspaces, func(i, j int) bool {
+		return workspaces[i].Name < workspaces[j].Name
+	})
 	return workspaces, nil
 }
 

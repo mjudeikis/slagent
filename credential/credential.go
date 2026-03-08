@@ -89,8 +89,15 @@ func Load(workspace string) (*Credentials, error) {
 	if name == "" {
 		name = s.Default
 	}
+
+	// If no default and only one workspace, use it
+	if name == "" && len(s.Workspaces) == 1 {
+		for k := range s.Workspaces {
+			name = k
+		}
+	}
 	if name == "" {
-		return nil, fmt.Errorf("no default workspace set (run 'slaude auth')")
+		return nil, fmt.Errorf("multiple workspaces configured, use -w to select (run 'slaude status' to list)")
 	}
 
 	creds, ok := s.Workspaces[name]
@@ -103,8 +110,7 @@ func Load(workspace string) (*Credentials, error) {
 	return &creds, nil
 }
 
-// Save writes credentials for a workspace. Sets as default if it's the first
-// workspace or if setDefault is true.
+// Save writes credentials for a workspace. Does not change the default.
 func Save(name string, creds *Credentials) error {
 	s, err := loadStore()
 	if err != nil {
@@ -115,12 +121,6 @@ func Save(name string, creds *Credentials) error {
 	}
 
 	s.Workspaces[name] = *creds
-
-	// Set default if first workspace or no default set
-	if s.Default == "" {
-		s.Default = name
-	}
-
 	return saveStore(s)
 }
 
