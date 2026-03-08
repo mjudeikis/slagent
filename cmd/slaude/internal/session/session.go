@@ -374,12 +374,41 @@ func (s *Session) readTurn() error {
 				}
 			}
 
-		case "tool_use":
+		case "tool_start":
+			// Early tool name from content_block_start — show activity immediately
 			finishTool()
 			toolSeq++
 			lastToolID = fmt.Sprintf("t%d", toolSeq)
 			lastToolName = evt.ToolName
-			lastToolDetail = toolDetail(evt.ToolName, evt.ToolInput)
+			lastToolDetail = ""
+			s.ui.ToolActivity(formatTool(evt.ToolName, ""))
+			if turn != nil {
+				turn.Tool(lastToolID, evt.ToolName, slagent.ToolRunning, "")
+			}
+
+		case "input_json_delta":
+			// Streaming tool input — ignored for now (full input arrives with assistant event)
+
+		case "rate_limit":
+			if evt.Text != "allowed" {
+				msg := "⏳ Rate limited — waiting..."
+				s.ui.Info(msg)
+				if turn != nil {
+					turn.Status(msg)
+				}
+			}
+
+		case "tool_use":
+			// If tool_start already created this tool, update with full detail
+			if lastToolName == evt.ToolName && lastToolDetail == "" {
+				lastToolDetail = toolDetail(evt.ToolName, evt.ToolInput)
+			} else {
+				finishTool()
+				toolSeq++
+				lastToolID = fmt.Sprintf("t%d", toolSeq)
+				lastToolName = evt.ToolName
+				lastToolDetail = toolDetail(evt.ToolName, evt.ToolInput)
+			}
 			s.ui.ToolActivity(formatTool(evt.ToolName, evt.ToolInput))
 
 			if turn != nil {

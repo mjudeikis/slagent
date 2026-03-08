@@ -28,7 +28,28 @@ const (
 	DeltaText      = "text_delta"
 	DeltaThinking  = "thinking_delta"
 	DeltaSignature = "signature_delta"
+	DeltaInputJSON = "input_json_delta"
 )
+
+// ContentBlockInfo is the "content_block" in content_block_start.
+type ContentBlockInfo struct {
+	Type string `json:"type"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+}
+
+// RateLimitInfo is the "rate_limit_info" in a rate_limit_event.
+type RateLimitInfo struct {
+	Status    string `json:"status"`
+	ResetsAt  int64  `json:"resetsAt"`
+	RateType  string `json:"rateLimitType"`
+}
+
+// RawRateLimitEvent wraps the rate limit payload.
+type RawRateLimitEvent struct {
+	Type          string        `json:"type"`
+	RateLimitInfo RateLimitInfo `json:"rate_limit_info"`
+}
 
 // RawEvent is a partially-parsed stream-json line.
 type RawEvent struct {
@@ -88,9 +109,9 @@ type ContentBlock struct {
 
 // Event is a high-level parsed event for consumers.
 type Event struct {
-	Type      string // system, text_delta, thinking, assistant, tool_use, control_request, result, etc.
-	Text      string // for text_delta and assistant
-	ToolName  string // for tool_use and control_request
+	Type      string // system, text_delta, thinking, tool_start, tool_use, control_request, rate_limit, result, etc.
+	Text      string // for text_delta, assistant, and rate_limit (status)
+	ToolName  string // for tool_start, tool_use, and control_request
 	ToolInput string // for tool_use and control_request
 	IsError   bool   // for result
 	SessionID string
@@ -118,6 +139,17 @@ func ParseEvent(line []byte) (*Event, error) {
 			return nil, err
 		}
 		switch inner.Type {
+		case EventContentBlockStart:
+			// Early tool detection: content_block_start with type "tool_use"
+			if inner.ContentBlock != nil {
+				var cb ContentBlockInfo
+				if err := json.Unmarshal(inner.ContentBlock, &cb); err == nil && cb.Type == "tool_use" {
+					evt.Type = "tool_start"
+					evt.ToolName = cb.Name
+					break
+				}
+			}
+			evt.Type = "stream_other"
 		case EventContentBlockDelta:
 			var d Delta
 			if err := json.Unmarshal(inner.Delta, &d); err != nil {
@@ -130,6 +162,9 @@ func ParseEvent(line []byte) (*Event, error) {
 			case DeltaThinking:
 				evt.Type = "thinking"
 				evt.Text = d.Text
+			case DeltaInputJSON:
+				evt.Type = "input_json_delta"
+				evt.Text = d.Text
 			case DeltaSignature:
 				evt.Type = "signature"
 			default:
@@ -137,6 +172,15 @@ func ParseEvent(line []byte) (*Event, error) {
 			}
 		default:
 			evt.Type = "stream_other"
+		}
+
+	case TypeRateLimitEvent:
+		var rl RawRateLimitEvent
+		if err := json.Unmarshal(line, &rl); err == nil {
+			evt.Type = "rate_limit"
+			evt.Text = rl.RateLimitInfo.Status
+		} else {
+			evt.Type = "rate_limit"
 		}
 
 	case TypeAssistant:
