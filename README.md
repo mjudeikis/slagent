@@ -15,6 +15,7 @@
 
 ```bash
 # Homebrew
+brew tap sttts/slagent https://github.com/sttts/slagent
 brew install sttts/slagent/slaude
 
 # or build from source
