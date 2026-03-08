@@ -61,15 +61,17 @@ Uses standard Slack Web API. Two message types per turn:
 1. **Activity message** — single context block, updated in-place, showing
    thinking + tools + status (max 6 lines). Tools tracked via `toolIndex` map
    for in-place updates. Icons: `:claude:` when running, checkmark when done,
-   X on error.
+   X on error. **Activity is transient** — deleted when new text arrives via
+   `deleteActivity()`, keeping the thread clean.
 
 2. **Text message** — posted with robot prefix, markdown converted to mrkdwn.
    Full text is shown during streaming (no truncation).
 
 **Throttling and debounce:**
 - Updates throttled to 1/sec per message (Slack rate limit)
-- `forceFlushText()` bypasses throttle when tools/thinking start (ensures text
-  is visible before activity begins)
+- `finalizeText()` flushes text with final block_id and resets state when
+  tools/thinking start — ensures text is visible before activity begins and
+  post-tool text creates a new message
 - Debounce timers (`time.AfterFunc`, 1s) flush remaining content after idle
 
 ## Native Backend (xoxb-)
@@ -98,9 +100,16 @@ turn.Tool("t1", "Read", "done", "main.go")
 turn.Text("Here is my analysis...")
 turn.Finish()
 
-thread.Post("Status update")              // standalone message
+thread.Post("Status update")              // standalone message (returns ts)
+thread.UpdateMessage(ts, "Updated text")  // update existing message
+thread.DeleteMessage(ts)                  // delete a message
 thread.PostUser("alice", "What about X?") // user message with avatar
 thread.PostMarkdown(planText)             // content in code block
+
+// Interactive prompts with reaction emojis
+ts, _ := thread.PostPrompt("Approve?", []string{"white_check_mark", "x"})
+selected, _ := thread.PollReaction(ts, []string{"white_check_mark", "x"})
+thread.FinalizeReaction(ts, selected, []string{"white_check_mark", "x"})
 ```
 
 Thread parent message format: `:thread: <title>` (plain text for emoji

@@ -30,6 +30,8 @@ cmd/slaude/internal/
   claude/process.go               Claude Code subprocess lifecycle
   claude/events.go                Stream-JSON event type definitions and parser
   terminal/terminal.go            Terminal UI (streaming output, tool/thinking lines)
+  perms/server.go                 MCP stdio server for permission prompts
+  perms/listener.go               Unix socket listener in parent slaude process
 ```
 
 ## CLI Flags
@@ -140,9 +142,10 @@ Events are parsed into high-level `Event` structs:
 ### Turn Boundaries
 
 The `result` event marks the end of a turn. At this point:
-1. The slagent turn is finalized (text message updated to full content, activity frozen)
-2. Queued Slack replies are checked and injected as the next user message
-3. The session waits for more Slack feedback
+1. The slagent turn is finalized (text message updated to full content)
+2. Tasks message is reposted to stay near the bottom of the thread
+3. Queued Slack replies are checked and injected as the next user message
+4. The session waits for more Slack feedback
 
 ### Tool Lifecycle
 
@@ -189,13 +192,84 @@ Main Loop:
      d. Post interactive tools as standalone Slack messages
      e. Post code diffs (Edit/Write) as separate Slack messages
      f. Track tool lifecycle (running → done)
-     g. On result: finalize turn, return
+     g. Intercept TodoWrite → update tasks message in Slack
+     h. On result: finalize turn, repost tasks, return
   3. Start Slack poller (background goroutine)
   4. Wait for Slack replies (blocking)
   5. Show replies in terminal, format as [Team feedback from Slack]
   6. Send to Claude via stdin
   7. Read turn (go to step 2)
 ```
+
+## Permission Approval via MCP
+
+Claude Code's `--permission-prompt-tool` delegates permission decisions to an
+MCP tool. slaude uses this to let the Slack thread owner approve or deny tools.
+
+### Architecture
+
+```
+Claude Code                    slaude (parent)              Slack
+    │                              │                          │
+    ├─ needs permission ──────────>│                          │
+    │  (MCP tool call)             │                          │
+    │                              ├─ post ✅❌ prompt ──────>│
+    │                              │                          │
+    │                              │<── poll owner reaction ──│
+    │                              │                          │
+    │<── allow/deny ──────────────│                          │
+    │                              ├─ delete prompt ─────────>│
+```
+
+### Components
+
+- **MCP stdio server** (`perms/server.go`): Hidden `_mcp-permissions`
+  subcommand. Claude launches it as an MCP subprocess. Handles JSON-RPC 2.0
+  (initialize, tools/list, tools/call). Forwards permission requests to the
+  parent slaude process via Unix socket.
+
+- **Unix socket listener** (`perms/listener.go`): Runs in the parent slaude
+  process. Accepts connections from the MCP server. Delegates to a `Handler`
+  function that posts the prompt to Slack, polls for reaction, and returns
+  allow/deny.
+
+### MCP Response Format
+
+Allow response (updatedInput is **required** — Claude validates as union type):
+```json
+{"behavior": "allow", "updatedInput": {"command": "ls", "description": "..."}}
+```
+
+Deny response (message is **required**):
+```json
+{"behavior": "deny", "message": "denied by owner"}
+```
+
+### Config
+
+`--mcp-config` expects a **file path**, not inline JSON. The listener writes
+config to a temp file via `MCPConfigFile()`. The tool reference is
+`mcp__slaude_perms__permission_prompt`.
+
+## Task Tracking in Slack
+
+Claude's `TodoWrite` tool_use events are intercepted to mirror the task list
+in the Slack thread as a persistent message.
+
+### Flow
+
+1. `tool_use` with `ToolName == "TodoWrite"` → `updateTodos()` parses input
+2. Tasks rendered as mrkdwn: `📋 *Tasks*\n  ☐ pending\n  ⏳ in_progress\n  ✅ ~completed~`
+3. First call posts a new message; subsequent calls update in place
+4. After each turn (`result` event), the tasks message is delete+reposted
+   to keep it near the bottom of the thread
+
+### Thread Message Ordering
+
+Messages at the bottom of the thread follow this order:
+1. **Text message** — agent response (activity is transient, deleted when text arrives)
+2. **Tasks message** — persistent TODO list (only shown when tasks exist)
+3. **Question/prompt** — interactive prompt with reaction emojis (optional)
 
 ## Interactive Buttons (planned)
 
