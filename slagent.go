@@ -52,27 +52,27 @@ type threadConfig struct {
 var identityEmojis = map[string]string{
 	// Animals
 	"dog": "🐶", "cat": "🐱", "mouse": "🐭", "hamster": "🐹",
-	"rabbit": "🐰", "fox": "🦊", "bear": "🐻", "panda": "🐼",
-	"koala": "🐨", "tiger": "🐯", "lion": "🦁", "cow": "🐮",
+	"rabbit": "🐰", "fox_face": "🦊", "bear": "🐻", "panda_face": "🐼",
+	"koala": "🐨", "tiger": "🐯", "lion_face": "🦁", "cow": "🐮",
 	"pig": "🐷", "frog": "🐸", "monkey": "🐵", "chicken": "🐔",
 	"penguin": "🐧", "bird": "🐦", "eagle": "🦅", "duck": "🦆",
 	"owl": "🦉", "bat": "🦇", "wolf": "🐺", "boar": "🐗",
-	"horse": "🐴", "unicorn": "🦄", "bee": "🐝", "bug": "🐛",
+	"horse": "🐴", "unicorn_face": "🦄", "bee": "🐝", "bug": "🐛",
 	"butterfly": "🦋", "snail": "🐌", "ladybug": "🐞", "ant": "🐜",
 	"turtle": "🐢", "snake": "🐍", "lizard": "🦎", "t-rex": "🦖",
 	"sauropod": "🦕", "octopus": "🐙", "squid": "🦑", "shrimp": "🦐",
 	"lobster": "🦞", "crab": "🦀", "blowfish": "🐡", "fish": "🐠",
 	"dolphin": "🐬", "whale": "🐳", "shark": "🦈", "crocodile": "🐊",
-	"leopard": "🐆", "zebra": "🦓", "gorilla": "🦍", "elephant": "🐘",
-	"hippo": "🦛", "rhino": "🦏", "camel": "🐫", "giraffe": "🦒",
+	"leopard": "🐆", "zebra_face": "🦓", "gorilla": "🦍", "elephant": "🐘",
+	"hippopotamus": "🦛", "rhinoceros": "🦏", "camel": "🐫", "giraffe_face": "🦒",
 	"kangaroo": "🦘", "ox": "🐂", "deer": "🦌", "rooster": "🐓",
 	"turkey": "🦃", "peacock": "🦚", "parrot": "🦜", "swan": "🦢",
 	"flamingo": "🦩", "raccoon": "🦝", "badger": "🦡", "otter": "🦦",
 	"sloth": "🦥", "hedgehog": "🦔", "chipmunk": "🐿",
 	// Neutral person heads
 	"baby": "👶", "boy": "👦", "girl": "👧", "man": "👨",
-	"woman": "👩", "grandpa": "👴", "grandma": "👵", "child": "🧒",
-	"adult": "🧑", "elder": "🧓",
+	"woman": "👩", "older_man": "👴", "older_woman": "👵", "child": "🧒",
+	"adult": "🧑",
 }
 
 // identityKeys is the sorted list of short codes for random selection.
