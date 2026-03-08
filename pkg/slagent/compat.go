@@ -39,6 +39,7 @@ type compatTurn struct {
 	textUpdate time.Time
 	textTimer  *time.Timer // debounce timer for text flush
 	question   bool        // replace trailing ? with ❓ on finish
+	qPrefix    string      // prepended to text on finish (e.g. "@user: ")
 
 	mu sync.Mutex
 }
@@ -225,10 +226,11 @@ func (c *compatTurn) writeTool(id, name, status, detail string) {
 	c.flushActivity()
 }
 
-func (c *compatTurn) markQuestion() {
+func (c *compatTurn) markQuestion(prefix string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.question = true
+	c.qPrefix = prefix
 }
 
 func (c *compatTurn) writeStatus(text string) {
@@ -339,8 +341,11 @@ func (c *compatTurn) finish() error {
 		return nil
 	}
 
-	// Replace trailing ? with ❓ for question turns
+	// Question turns: prepend @mention, replace trailing ? with ❓
 	if c.question {
+		if c.qPrefix != "" {
+			finalText = c.qPrefix + finalText
+		}
 		finalText = strings.TrimRight(finalText, "\n ")
 		if strings.HasSuffix(finalText, "?") {
 			finalText = finalText[:len(finalText)-1] + " ❓"

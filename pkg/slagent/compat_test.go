@@ -552,9 +552,8 @@ func TestCompatMarkQuestionReplacesTrailingQuestionMark(t *testing.T) {
 	thread.Resume("1700000001.000000")
 
 	turn := thread.NewTurn()
-	turn.Text("<@U123>: ")
 	turn.Text("What do you mean by Sandbox?")
-	turn.MarkQuestion()
+	turn.MarkQuestion("<@U123>: ")
 	turn.Finish()
 
 	// Find the text message
@@ -580,7 +579,7 @@ func TestCompatMarkQuestionReplacesTrailingQuestionMark(t *testing.T) {
 		t.Errorf("should end with ' ❓', got: %q", content)
 	}
 
-	// Must have @mention inline with 🤖
+	// Must have @mention inline with 🤖 — prefix prepended at finish
 	if !strings.HasPrefix(content, "🤖 <@U123>: ") {
 		t.Errorf("should start with '🤖 <@U123>: ', got: %q", content)
 	}
@@ -594,9 +593,8 @@ func TestCompatMarkQuestionAppendsWhenNoQuestionMark(t *testing.T) {
 	thread.Resume("1700000001.000000")
 
 	turn := thread.NewTurn()
-	turn.Text("<@U123>: ")
 	turn.Text("Please clarify what you mean.")
-	turn.MarkQuestion()
+	turn.MarkQuestion("<@U123>: ")
 	turn.Finish()
 
 	active := mock.activeMessages()
@@ -662,9 +660,8 @@ func TestCompatMarkQuestionMultipleQuestionMarks(t *testing.T) {
 	thread.Resume("1700000001.000000")
 
 	turn := thread.NewTurn()
-	turn.Text("<@U123>: ")
 	turn.Text("What do you want? Could you clarify?")
-	turn.MarkQuestion()
+	turn.MarkQuestion("<@U123>: ")
 	turn.Finish()
 
 	active := mock.activeMessages()

@@ -274,11 +274,12 @@ func (s *Session) readTurn() error {
 					s.thread.PostPrompt(p.text, p.reactions)
 					lastToolID = "" // don't track in activity
 				} else if evt.ToolName == "AskUserQuestion" {
-					// Free-text question: prepend @mention, append ❓ on finish
+					// Free-text question: prepend @mention, replace ? with ❓ on finish
+					var prefix string
 					if ownerID := s.thread.OwnerID(); ownerID != "" {
-						turn.Text(fmt.Sprintf("<@%s>: ", ownerID))
+						prefix = fmt.Sprintf("<@%s>: ", ownerID)
 					}
-					turn.MarkQuestion()
+					turn.MarkQuestion(prefix)
 					lastToolID = "" // don't track in activity
 				} else {
 					turn.Tool(lastToolID, evt.ToolName, slagent.ToolRunning, lastToolDetail)

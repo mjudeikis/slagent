@@ -11,6 +11,7 @@ type fakeTurnWriter struct {
 	tools     []toolCall
 	statuses  []string
 	question  bool
+	qPrefix   string
 	finished  bool
 }
 
@@ -22,7 +23,7 @@ func (f *fakeTurnWriter) writeText(text string)                        { f.texts
 func (f *fakeTurnWriter) writeThinking(text string)                    { f.thinks = append(f.thinks, text) }
 func (f *fakeTurnWriter) writeTool(id, name, status, detail string)    { f.tools = append(f.tools, toolCall{id, name, status, detail}) }
 func (f *fakeTurnWriter) writeStatus(text string)                      { f.statuses = append(f.statuses, text) }
-func (f *fakeTurnWriter) markQuestion()                                { f.question = true }
+func (f *fakeTurnWriter) markQuestion(prefix string)                    { f.question = true; f.qPrefix = prefix }
 func (f *fakeTurnWriter) finish() error                                { f.finished = true; return nil }
 
 func TestTurnImplDelegation(t *testing.T) {

@@ -27,7 +27,8 @@ type nativeTurn struct {
 	flushed  int             // bytes of fullText already flushed
 	thinkBuf strings.Builder // accumulated thinking text
 	started  bool
-	question bool // replace trailing ? with ❓ on finish
+	question bool   // replace trailing ? with ❓ on finish
+	qPrefix  string // prepended to text on finish
 
 	mu sync.Mutex
 }
@@ -196,10 +197,11 @@ func (n *nativeTurn) writeTool(id, name, status, detail string) {
 	})
 }
 
-func (n *nativeTurn) markQuestion() {
+func (n *nativeTurn) markQuestion(prefix string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.question = true
+	n.qPrefix = prefix
 }
 
 func (n *nativeTurn) writeStatus(text string) {
@@ -228,9 +230,9 @@ func (n *nativeTurn) finish() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	// Replace trailing ? with ❓ for question turns
+	// Question turns: prepend @mention, replace trailing ? with ❓
 	if n.question && n.fullText.Len() > 0 {
-		s := strings.TrimRight(n.fullText.String(), "\n ")
+		s := n.qPrefix + strings.TrimRight(n.fullText.String(), "\n ")
 		n.fullText.Reset()
 		if strings.HasSuffix(s, "?") {
 			n.fullText.WriteString(s[:len(s)-1] + " ❓")

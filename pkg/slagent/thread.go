@@ -54,16 +54,13 @@ func NewThread(client *slackapi.Client, token, channel string, opts ...ThreadOpt
 
 // Start posts the initial thread message and returns the thread URL.
 func (t *Thread) Start(title string) (string, error) {
-	label := "🧵 Agent session"
+	label := ":thread: :claude: Agent session"
 	if title != "" {
-		label = fmt.Sprintf("🧵 %s", title)
+		label = fmt.Sprintf(":thread: :claude: %s", title)
 	}
-	headerText := slackapi.NewTextBlockObject("plain_text", label, true, false)
-	header := slackapi.NewHeaderBlock(headerText)
 
 	_, ts, err := t.api.PostMessage(
 		t.channel,
-		slackapi.MsgOptionBlocks(header),
 		slackapi.MsgOptionText(label, false),
 	)
 	if err != nil {
