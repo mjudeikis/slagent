@@ -259,6 +259,13 @@ func (c *compatTurn) writeText(text string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Strip leading newlines from the first text content
+	if c.textBuf.Len() == 0 {
+		text = strings.TrimLeft(text, "\n")
+		if text == "" {
+			return
+		}
+	}
 	c.textBuf.WriteString(text)
 
 	// Throttle updates to 1/sec
@@ -346,7 +353,7 @@ func (c *compatTurn) finish() error {
 	}
 
 	// Update text message to full final response
-	finalText := c.textBuf.String()
+	finalText := strings.TrimLeft(c.textBuf.String(), "\n")
 	if finalText == "" {
 		return nil
 	}
