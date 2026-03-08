@@ -303,6 +303,23 @@ func (t *Thread) PollReaction(msgTS string, expected []string) (string, error) {
 	return "", nil
 }
 
+// FinalizeReaction cleans up reactions after the owner has made a selection.
+// It removes all non-selected reactions and re-adds the selected one
+// (which was toggled off when the owner clicked it).
+func (t *Thread) FinalizeReaction(msgTS, selected string, all []string) {
+	ref := slackapi.ItemRef{Channel: t.channel, Timestamp: msgTS}
+
+	// Re-add the selected reaction (owner's click toggled it off)
+	t.api.AddReaction(selected, ref)
+
+	// Remove the non-selected reactions
+	for _, r := range all {
+		if r != selected {
+			t.api.RemoveReaction(r, ref)
+		}
+	}
+}
+
 // DeleteMessage deletes a message from the thread.
 func (t *Thread) DeleteMessage(msgTS string) error {
 	t.logSlack("deleteMessage", msgTS)
