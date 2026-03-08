@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="contrib/logo.png" width="200" alt="slagent logo">
+</p>
+
 # slagent
 
 > **Experimental** — this project is under active development. APIs, CLI flags, and behavior may change without notice. Use at your own risk.
