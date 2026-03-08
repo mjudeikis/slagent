@@ -19,7 +19,6 @@ type nativeTurn struct {
 	channel  string
 	threadTS string
 	convert  func(string) string
-	posted   func(ts string)
 	bufSize  int
 
 	streamID string // set after startStream
@@ -33,7 +32,7 @@ type nativeTurn struct {
 	mu sync.Mutex
 }
 
-func newNativeTurn(token, apiURL, channel, threadTS string, convert func(string) string, posted func(string), bufSize int) *nativeTurn {
+func newNativeTurn(token, apiURL, channel, threadTS string, convert func(string) string, bufSize int) *nativeTurn {
 	if apiURL == "" {
 		apiURL = defaultSlackAPIURL
 	}
@@ -43,7 +42,6 @@ func newNativeTurn(token, apiURL, channel, threadTS string, convert func(string)
 		channel:  channel,
 		threadTS: threadTS,
 		convert:  convert,
-		posted:   posted,
 		bufSize:  bufSize,
 	}
 }
@@ -68,10 +66,6 @@ func (n *nativeTurn) startStream() error {
 		return fmt.Errorf("chat.startStream: missing stream_id in response")
 	}
 	n.streamID = streamID
-
-	if ts, ok := resp["message_ts"].(string); ok {
-		n.posted(ts)
-	}
 	n.started = true
 	return nil
 }

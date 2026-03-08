@@ -36,11 +36,21 @@ type StartCmd struct {
 	ClaudeArgs   []string `name:"-" hidden:""`
 }
 
+// parseResumeThread splits "threadTS-instanceID" into its components.
+func parseResumeThread(value string) (threadTS, instanceID string) {
+	if idx := strings.LastIndex(value, "-"); idx > 0 {
+		return value[:idx], value[idx+1:]
+	}
+	return value, ""
+}
+
 func (cmd *StartCmd) Run() error {
+	threadTS, instanceID := parseResumeThread(cmd.ResumeThread)
 	cfg := session.Config{
 		Topic:          strings.Join(cmd.Topic, " "),
 		Channel:        cmd.Channel,
-		ResumeThreadTS: cmd.ResumeThread,
+		ResumeThreadTS: threadTS,
+		InstanceID:     instanceID,
 		Debug:          cmd.Debug,
 		Workspace:      cli.Workspace,
 		ClaudeArgs:     cmd.ClaudeArgs,
@@ -116,7 +126,9 @@ func (cmd *StartCmd) Run() error {
 		if resume.Channel != "" {
 			args += fmt.Sprintf(" -c %s", resume.Channel)
 		}
-		if resume.ThreadTS != "" {
+		if resume.ThreadTS != "" && resume.InstanceID != "" {
+			args += fmt.Sprintf(" --resume-thread %s-%s", resume.ThreadTS, resume.InstanceID)
+		} else if resume.ThreadTS != "" {
 			args += fmt.Sprintf(" --resume-thread %s", resume.ThreadTS)
 		}
 		args += fmt.Sprintf(" -- --resume %s", resume.SessionID)

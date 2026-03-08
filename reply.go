@@ -47,6 +47,7 @@ func (t *Thread) advanceLastTS(ts string) {
 }
 
 // pollOnce fetches new replies from the thread, filtering by permissions and own messages.
+// Messages posted by slagent are identified by block_id and skipped.
 func (t *Thread) pollOnce() ([]Reply, error) {
 	t.mu.Lock()
 	threadTS := t.threadTS
@@ -74,11 +75,8 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 			continue
 		}
 
-		// Skip messages we posted
-		t.mu.Lock()
-		ours := t.postedTS[msg.Timestamp]
-		t.mu.Unlock()
-		if ours {
+		// Skip messages posted by slagent (tagged with slagent block_id)
+		if hasSlagentBlock(msg.Blocks) {
 			t.advanceLastTS(msg.Timestamp)
 			continue
 		}

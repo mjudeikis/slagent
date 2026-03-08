@@ -8,6 +8,56 @@ import (
 	slackapi "github.com/slack-go/slack"
 )
 
+// slagentBlockPrefix is the prefix for block IDs on all slagent-posted messages.
+// The full block_id is "slagent-{instanceID}".
+const slagentBlockPrefix = "slagent-"
+
+// hasSlagentBlock returns true if any block has a slagent block ID prefix.
+func hasSlagentBlock(blocks slackapi.Blocks) bool {
+	for _, b := range blocks.BlockSet {
+		if strings.HasPrefix(b.ID(), slagentBlockPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// slagentSection wraps text in a section block tagged with this thread's block_id.
+func (t *Thread) slagentSection(text string) *slackapi.SectionBlock {
+	s := slackapi.NewSectionBlock(
+		slackapi.NewTextBlockObject("mrkdwn", text, false, false),
+		nil, nil,
+	)
+	s.BlockID = t.blockID
+	return s
+}
+
+// tagBlocks sets this thread's block_id on the first section/context block.
+func (t *Thread) tagBlocks(blocks []slackapi.Block) []slackapi.Block {
+	out := make([]slackapi.Block, len(blocks))
+	copy(out, blocks)
+	for i, b := range out {
+		switch bb := b.(type) {
+		case *slackapi.SectionBlock:
+			c := *bb
+			c.BlockID = t.blockID
+			out[i] = &c
+			return out
+		case *slackapi.ContextBlock:
+			c := *bb
+			c.BlockID = t.blockID
+			out[i] = &c
+			return out
+		}
+	}
+	return out
+}
+
+// InstanceID returns the instance identifier used in block_id tagging.
+func (t *Thread) InstanceID() string {
+	return t.instanceID
+}
+
 // logSlack writes a Slack API action to the Thread's log writer if configured.
 func (t *Thread) logSlack(action, content string) {
 	if t.config.slackLog == nil {
@@ -18,19 +68,20 @@ func (t *Thread) logSlack(action, content string) {
 
 // Thread manages an agent session in a Slack thread.
 type Thread struct {
-	api      *slackapi.Client
-	token    string // raw token for backend detection and native API calls
-	channel  string
-	threadTS string
-	config   threadConfig
+	api        *slackapi.Client
+	token      string // raw token for backend detection and native API calls
+	channel    string
+	threadTS   string
+	instanceID string // unique per slaude instance, used in block_id
+	blockID    string // "slagent-{instanceID}", cached
+	config     threadConfig
 
 	// Permissions
 	ownerID    string
 	openAccess bool
 
 	// Reply tracking
-	lastTS   string
-	postedTS map[string]bool
+	lastTS string
 
 	// User resolution
 	userCache map[string]string
@@ -47,14 +98,20 @@ func NewThread(client *slackapi.Client, token, channel string, opts ...ThreadOpt
 		o(&cfg)
 	}
 
+	instanceID := cfg.instanceID
+	if instanceID == "" {
+		instanceID = randomInstanceID()
+	}
+
 	t := &Thread{
 		api:        client,
 		token:      token,
 		channel:    channel,
+		instanceID: instanceID,
+		blockID:    slagentBlockPrefix + instanceID,
 		config:     cfg,
 		ownerID:    cfg.ownerID,
 		openAccess: cfg.openAccess,
-		postedTS:   make(map[string]bool),
 		userCache:  make(map[string]string),
 	}
 	return t
@@ -70,6 +127,7 @@ func (t *Thread) Start(title string) (string, error) {
 	t.logSlack("postMessage(thread-start)", label)
 	_, ts, err := t.api.PostMessage(
 		t.channel,
+		slackapi.MsgOptionBlocks(t.slagentSection(label)),
 		slackapi.MsgOptionText(label, false),
 	)
 	if err != nil {
@@ -105,18 +163,12 @@ func (t *Thread) NewTurn() Turn {
 	threadTS := t.threadTS
 	t.mu.Unlock()
 
-	posted := func(ts string) {
-		t.mu.Lock()
-		t.postedTS[ts] = true
-		t.mu.Unlock()
-	}
-
 	// Select backend based on token type
 	var w turnWriter
 	if isNativeToken(t.token) {
-		w = newNativeTurn(t.token, t.config.apiURL, t.channel, threadTS, t.config.markdownConverter, posted, t.config.bufferSize)
+		w = newNativeTurn(t.token, t.config.apiURL, t.channel, threadTS, t.config.markdownConverter, t.config.bufferSize)
 	} else {
-		w = newCompatTurn(t.api, t.channel, threadTS, posted, t.config.slackLog)
+		w = newCompatTurn(t.api, t.channel, threadTS, t.blockID, t.config.slackLog)
 	}
 	return &turnImpl{w: w}
 }
@@ -132,19 +184,13 @@ func (t *Thread) Post(text string) error {
 	}
 
 	t.logSlack("postMessage(post)", text)
-	_, ts, err := t.api.PostMessage(
+	_, _, err := t.api.PostMessage(
 		t.channel,
+		slackapi.MsgOptionBlocks(t.slagentSection(text)),
 		slackapi.MsgOptionText(text, false),
 		slackapi.MsgOptionTS(threadTS),
 	)
-	if err != nil {
-		return err
-	}
-
-	t.mu.Lock()
-	t.postedTS[ts] = true
-	t.mu.Unlock()
-	return nil
+	return err
 }
 
 // PostPrompt posts a message and adds reaction emojis for interactive responses.
@@ -162,16 +208,13 @@ func (t *Thread) PostPrompt(text string, reactions []string) (string, error) {
 	t.logSlack("postMessage(prompt)", text)
 	_, ts, err := t.api.PostMessage(
 		t.channel,
+		slackapi.MsgOptionBlocks(t.slagentSection(text)),
 		slackapi.MsgOptionText(text, false),
 		slackapi.MsgOptionTS(threadTS),
 	)
 	if err != nil {
 		return "", err
 	}
-
-	t.mu.Lock()
-	t.postedTS[ts] = true
-	t.mu.Unlock()
 
 	// Pre-add reaction emojis as clickable options (session/user tokens only).
 	// Bot tokens will use Block Kit buttons via Socket Mode instead.
@@ -238,21 +281,15 @@ func (t *Thread) PostBlocks(fallback string, blocks ...slackapi.Block) error {
 		return fmt.Errorf("no active thread")
 	}
 
+	tagged := t.tagBlocks(blocks)
 	t.logSlack("postMessage(blocks)", fallback)
-	_, ts, err := t.api.PostMessage(
+	_, _, err := t.api.PostMessage(
 		t.channel,
-		slackapi.MsgOptionBlocks(blocks...),
+		slackapi.MsgOptionBlocks(tagged...),
 		slackapi.MsgOptionText(fallback, false),
 		slackapi.MsgOptionTS(threadTS),
 	)
-	if err != nil {
-		return err
-	}
-
-	t.mu.Lock()
-	t.postedTS[ts] = true
-	t.mu.Unlock()
-	return nil
+	return err
 }
 
 // PostUser posts a user message with context block ("👤 @user") and text section.
@@ -265,7 +302,7 @@ func (t *Thread) PostUser(user, text string) error {
 		return fmt.Errorf("no active thread")
 	}
 
-	ctx := slackapi.NewContextBlock("",
+	ctx := slackapi.NewContextBlock(t.blockID,
 		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("👤 @%s", user), false, false),
 	)
 	section := slackapi.NewSectionBlock(
@@ -274,20 +311,13 @@ func (t *Thread) PostUser(user, text string) error {
 	)
 	fallback := fmt.Sprintf("@%s: %s", user, text)
 	t.logSlack("postMessage(user)", fallback)
-	_, ts, err := t.api.PostMessage(
+	_, _, err := t.api.PostMessage(
 		t.channel,
 		slackapi.MsgOptionBlocks(ctx, section),
 		slackapi.MsgOptionText(fallback, false),
 		slackapi.MsgOptionTS(threadTS),
 	)
-	if err != nil {
-		return err
-	}
-
-	t.mu.Lock()
-	t.postedTS[ts] = true
-	t.mu.Unlock()
-	return nil
+	return err
 }
 
 // PostMarkdown posts markdown content as code blocks in the thread.
@@ -304,12 +334,9 @@ func (t *Thread) PostMarkdown(text string) error {
 	chunks := splitAtLines(text, maxBlockTextLen-8)
 	for _, chunk := range chunks {
 		fenced := "```\n" + chunk + "\n```"
-		section := slackapi.NewSectionBlock(
-			slackapi.NewTextBlockObject("mrkdwn", fenced, false, false),
-			nil, nil,
-		)
+		section := t.slagentSection(fenced)
 		t.logSlack("postMessage(markdown)", fenced)
-		_, ts, err := t.api.PostMessage(
+		_, _, err := t.api.PostMessage(
 			t.channel,
 			slackapi.MsgOptionBlocks(section),
 			slackapi.MsgOptionText(chunk, false),
@@ -318,9 +345,6 @@ func (t *Thread) PostMarkdown(text string) error {
 		if err != nil {
 			return err
 		}
-		t.mu.Lock()
-		t.postedTS[ts] = true
-		t.mu.Unlock()
 	}
 	return nil
 }

@@ -25,6 +25,7 @@ type Config struct {
 	Channel        string
 	ChannelName    string   // display name (e.g. "#general" or "@haarchri")
 	ResumeThreadTS string   // Slack thread timestamp to resume
+	InstanceID     string   // slagent instance ID (for resume; empty = generate new)
 	Debug          bool     // write raw JSON events to debug.log
 	Workspace      string   // Slack workspace (empty = default)
 	ClaudeArgs     []string // pass-through args for Claude subprocess
@@ -32,9 +33,10 @@ type Config struct {
 
 // ResumeInfo is returned by Run so the caller can print a resume command.
 type ResumeInfo struct {
-	SessionID string
-	Channel   string
-	ThreadTS  string
+	SessionID  string
+	Channel    string
+	ThreadTS   string
+	InstanceID string
 }
 
 // Session is a running slaude session.
@@ -100,6 +102,11 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 		resp, err := client.AuthTest()
 		if err == nil && resp.UserID != "" {
 			opts = append(opts, slagent.WithOwner(resp.UserID))
+		}
+
+		// Pass instance ID for block_id tagging (empty = generate new)
+		if cfg.InstanceID != "" {
+			opts = append(opts, slagent.WithInstanceID(cfg.InstanceID))
 		}
 
 		// Log Slack API calls in debug mode
@@ -214,9 +221,10 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 
 	// Build resume info
 	resume := &ResumeInfo{
-		SessionID: proc.SessionID(),
-		Channel:   cfg.Channel,
-		ThreadTS:  sess.thread.ThreadTS(),
+		SessionID:  proc.SessionID(),
+		Channel:    cfg.Channel,
+		ThreadTS:   sess.thread.ThreadTS(),
+		InstanceID: sess.thread.InstanceID(),
 	}
 
 	return resume, nil

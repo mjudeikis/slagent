@@ -24,7 +24,7 @@ type compatTurn struct {
 	api      *slackapi.Client
 	channel  string
 	threadTS string
-	posted   func(ts string)
+	blockID  string    // slagent block_id for message tagging
 	slackLog io.Writer // optional Slack API logger
 
 	// Unified activity message (thinking + tools + status)
@@ -46,12 +46,12 @@ type compatTurn struct {
 	mu sync.Mutex
 }
 
-func newCompatTurn(api *slackapi.Client, channel, threadTS string, posted func(string), slackLog io.Writer) *compatTurn {
+func newCompatTurn(api *slackapi.Client, channel, threadTS, blockID string, slackLog io.Writer) *compatTurn {
 	return &compatTurn{
 		api:       api,
 		channel:   channel,
 		threadTS:  threadTS,
-		posted:    posted,
+		blockID:   blockID,
 		slackLog:  slackLog,
 		toolIndex: make(map[string]int),
 	}
@@ -66,10 +66,18 @@ func (c *compatTurn) logSlack(action, content string) {
 }
 
 // textMsgOpts returns message options for a text message with 🤖 prefix.
-// Converts markdown to Slack mrkdwn format.
-func textMsgOpts(display string) slackapi.MsgOption {
-	converted := MarkdownToMrkdwn(display)
-	return slackapi.MsgOptionText("🤖 "+converted, false)
+// Converts markdown to Slack mrkdwn format. Uses a section block with the given block_id.
+func textMsgOpts(display, blockID string) []slackapi.MsgOption {
+	converted := "🤖 " + MarkdownToMrkdwn(display)
+	section := slackapi.NewSectionBlock(
+		slackapi.NewTextBlockObject("mrkdwn", converted, false, false),
+		nil, nil,
+	)
+	section.BlockID = blockID
+	return []slackapi.MsgOption{
+		slackapi.MsgOptionBlocks(section),
+		slackapi.MsgOptionText(converted, false),
+	}
 }
 
 // renderActivity builds the activity message content from thinking + activity lines,
@@ -119,7 +127,7 @@ func (c *compatTurn) postActivity() {
 		return
 	}
 
-	ctx := slackapi.NewContextBlock("",
+	ctx := slackapi.NewContextBlock(c.blockID,
 		slackapi.NewTextBlockObject("mrkdwn", display, false, false),
 	)
 
@@ -133,7 +141,6 @@ func (c *compatTurn) postActivity() {
 		)
 		if err == nil {
 			c.activityTS = ts
-			c.posted(ts)
 		}
 	} else {
 		c.logSlack("updateMessage(activity)", display)
@@ -264,27 +271,19 @@ func (c *compatTurn) writeText(text string) {
 // Must be called with lock held.
 func (c *compatTurn) postText() {
 	full := c.textBuf.String()
-	opt := textMsgOpts(full)
+	opts := textMsgOpts(full, c.blockID)
 
 	converted := "🤖 " + MarkdownToMrkdwn(full)
 	if c.textTS == "" {
 		c.logSlack("postMessage(text)", converted)
-		_, ts, err := c.api.PostMessage(
-			c.channel,
-			opt,
-			slackapi.MsgOptionTS(c.threadTS),
-		)
+		allOpts := append(opts, slackapi.MsgOptionTS(c.threadTS))
+		_, ts, err := c.api.PostMessage(c.channel, allOpts...)
 		if err == nil {
 			c.textTS = ts
-			c.posted(ts)
 		}
 	} else {
 		c.logSlack("updateMessage(text)", converted)
-		c.api.UpdateMessage(
-			c.channel,
-			c.textTS,
-			opt,
-		)
+		c.api.UpdateMessage(c.channel, c.textTS, opts...)
 	}
 	c.textUpdate = time.Now()
 }
@@ -325,7 +324,7 @@ func (c *compatTurn) finish() error {
 	c.postActivity()
 	if c.activityTS != "" {
 		display := c.renderActivity()
-		ctx := slackapi.NewContextBlock("",
+		ctx := slackapi.NewContextBlock(c.blockID,
 			slackapi.NewTextBlockObject("mrkdwn", display, false, false),
 		)
 		c.api.UpdateMessage(
@@ -356,25 +355,18 @@ func (c *compatTurn) finish() error {
 	}
 
 	// Update existing text message with full content
+	opts := textMsgOpts(finalText, c.blockID)
 	finalConverted := "🤖 " + MarkdownToMrkdwn(finalText)
 	if c.textTS != "" {
 		c.logSlack("updateMessage(text/final)", finalConverted)
-		c.api.UpdateMessage(
-			c.channel,
-			c.textTS,
-			textMsgOpts(finalText),
-		)
+		c.api.UpdateMessage(c.channel, c.textTS, opts...)
 	} else {
 		c.logSlack("postMessage(text/final)", finalConverted)
-		_, ts, err := c.api.PostMessage(
-			c.channel,
-			textMsgOpts(finalText),
-			slackapi.MsgOptionTS(c.threadTS),
-		)
+		allOpts := append(opts, slackapi.MsgOptionTS(c.threadTS))
+		_, _, err := c.api.PostMessage(c.channel, allOpts...)
 		if err != nil {
 			return err
 		}
-		c.posted(ts)
 	}
 
 	return nil

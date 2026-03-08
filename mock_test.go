@@ -219,6 +219,9 @@ func (m *mockSlack) handleConversationReplies(w http.ResponseWriter, r *http.Req
 		if msg.BotID != "" {
 			entry["bot_id"] = msg.BotID
 		}
+		if len(msg.Blocks) > 0 {
+			entry["blocks"] = json.RawMessage(msg.Blocks)
+		}
 		msgs = append(msgs, entry)
 	}
 	m.mu.Unlock()
