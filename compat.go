@@ -294,8 +294,16 @@ func (c *compatTurn) writeText(text string) {
 			return
 		}
 
-		// Delete activity message when new text starts — tools are transient
-		c.deleteActivity()
+		// Reuse activity message for text (avoids delete+post flicker)
+		if c.activityTS != "" {
+			c.stopActivityTimer()
+			c.textTS = c.activityTS
+			c.activityTS = ""
+			c.activityDeleted = true
+			c.thinkBuf.Reset()
+			c.activities = nil
+			c.toolIndex = make(map[string]int)
+		}
 	}
 	c.textBuf.WriteString(text)
 
