@@ -75,21 +75,25 @@ func parseThreadURL(value string) (ch, threadTS, instanceID, afterTS string) {
 
 	parts := strings.Split(value, "/")
 	for i, p := range parts {
-		if p == "archives" && i+2 < len(parts) {
+		if p == "archives" && i+1 < len(parts) {
 			ch = parts[i+1]
-			tsRaw := parts[i+2]
 
-			// Strip query string
-			if idx := strings.Index(tsRaw, "?"); idx >= 0 {
-				tsRaw = tsRaw[:idx]
-			}
+			// Optional timestamp after channel ID
+			if i+2 < len(parts) {
+				tsRaw := parts[i+2]
 
-			// Convert pTIMESTAMP → TIMESTAMP.MICROSECONDS
-			tsRaw = strings.TrimPrefix(tsRaw, "p")
-			if len(tsRaw) > 6 {
-				threadTS = tsRaw[:len(tsRaw)-6] + "." + tsRaw[len(tsRaw)-6:]
-			} else {
-				threadTS = tsRaw
+				// Strip query string
+				if idx := strings.Index(tsRaw, "?"); idx >= 0 {
+					tsRaw = tsRaw[:idx]
+				}
+
+				// Convert pTIMESTAMP → TIMESTAMP.MICROSECONDS
+				tsRaw = strings.TrimPrefix(tsRaw, "p")
+				if len(tsRaw) > 6 {
+					threadTS = tsRaw[:len(tsRaw)-6] + "." + tsRaw[len(tsRaw)-6:]
+				} else {
+					threadTS = tsRaw
+				}
 			}
 			return
 		}
@@ -110,6 +114,13 @@ func (cmd *StartCmd) Run() error {
 	// Ensure credentials exist before any Slack API call
 	if err := credential.Ensure(cfg.Workspace, interactiveAuth); err != nil {
 		return err
+	}
+
+	// Try parsing --channel as a Slack URL
+	if cfg.Channel != "" && !isSlackID(cfg.Channel) {
+		if ch, _, _, _ := parseThreadURL(cfg.Channel); ch != "" {
+			cfg.Channel = ch
+		}
 	}
 
 	// Resolve --channel name or --user(s) to a channel ID
@@ -501,6 +512,17 @@ func promptChannel(workspace string) (string, string, error) {
 		return "", "", err
 	}
 
+	// Show identity
+	if name, _, team, teamURL := client.Identity(); name != "" {
+		if teamURL != "" {
+			fmt.Fprintf(os.Stderr, "👤 @%s on %s (%s)\n", name, team, teamURL)
+		} else if team != "" {
+			fmt.Fprintf(os.Stderr, "👤 @%s on %s\n", name, team)
+		} else {
+			fmt.Fprintf(os.Stderr, "👤 @%s\n", name)
+		}
+	}
+
 	channels, err := client.ListChannels(slackProgress)
 	fmt.Fprint(os.Stderr, "\r\033[K")
 
@@ -521,7 +543,7 @@ func promptChannel(workspace string) (string, string, error) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Could not list channels: %v\n", err)
 		}
-		fmt.Print("📡 Channel ID or URL (or @username for DM): ")
+		fmt.Print("📡 Channel ID or URL (or @username / @email / @U... for DM): ")
 	} else {
 		fmt.Println("📡 Pick a channel (or type @username for a DM):")
 		for i, ch := range channels {
@@ -589,8 +611,16 @@ func runAuthManual() error {
 	fmt.Println("     • chat:write")
 	fmt.Println("     • channels:history")
 	fmt.Println("     • groups:history")
+	fmt.Println("     • im:history")
+	fmt.Println("     • mpim:history")
 	fmt.Println("     • channels:read")
 	fmt.Println("     • groups:read")
+	fmt.Println("     • im:read")
+	fmt.Println("     • im:write")
+	fmt.Println("     • mpim:read")
+	fmt.Println("     • mpim:write")
+	fmt.Println("     • reactions:read")
+	fmt.Println("     • reactions:write")
 	fmt.Println("     • users:read")
 	fmt.Println("  5️⃣  Install the app to your workspace")
 	fmt.Println("  6️⃣  Copy the token (xoxb-... for bot, xoxp-... for user)")

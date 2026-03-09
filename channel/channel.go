@@ -24,6 +24,9 @@ type Client struct {
 	userCache    map[string]string
 	mu           sync.Mutex
 	ownUserID    string // set via auth.test for user/session tokens
+	ownUserName  string // set via auth.test for user/session tokens
+	teamName     string // set via auth.test
+	teamURL      string // set via auth.test
 	enterpriseID string // set when on enterprise grid (restricts some APIs)
 }
 
@@ -42,6 +45,9 @@ func New(c *slackclient.Client) (*Client, error) {
 			return nil, fmt.Errorf("auth.test: %w", err)
 		}
 		ch.ownUserID = resp.UserID
+		ch.ownUserName = resp.User
+		ch.teamName = resp.Team
+		ch.teamURL = resp.URL
 		if resp.EnterpriseID != "" {
 			ch.enterpriseID = resp.EnterpriseID
 		}
@@ -52,6 +58,11 @@ func New(c *slackclient.Client) (*Client, error) {
 		ch.enterpriseID = "enterprise"
 	}
 	return ch, nil
+}
+
+// Identity returns the authenticated user's display name, ID, team name, and team URL.
+func (c *Client) Identity() (name, userID, team, teamURL string) {
+	return c.ownUserName, c.ownUserID, c.teamName, c.teamURL
 }
 
 // ResolveChannelByName looks up a channel by name and returns its ID.
@@ -108,6 +119,16 @@ func (c *Client) ResolveUserChannel(names ...string) (string, error) {
 
 // resolveOneUser resolves a single username to a user ID.
 func (c *Client) resolveOneUser(name string) (string, error) {
+	// Raw user ID (U + alphanumeric)
+	if isUserID(name) {
+		return name, nil
+	}
+
+	// "me" or own username resolves to the authenticated user
+	if c.ownUserID != "" && (strings.EqualFold(name, "me") || strings.EqualFold(name, c.ownUserName)) {
+		return c.ownUserID, nil
+	}
+
 	// Try search.modules first (single API call, instant)
 	if userID, err := c.searchUser(name); err == nil {
 		return userID, nil
@@ -124,7 +145,27 @@ func (c *Client) resolveOneUser(name string) (string, error) {
 		}
 	}
 
+	// Email lookup via users.lookupByEmail
+	if strings.Contains(name, "@") {
+		if user, err := c.slack.GetUserByEmail(name); err == nil {
+			return user.ID, nil
+		}
+	}
+
 	return "", fmt.Errorf("not found")
+}
+
+// isUserID returns true if s looks like a Slack user ID (U + uppercase alphanumeric).
+func isUserID(s string) bool {
+	if len(s) < 2 || s[0] != 'U' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) {
+			return false
+		}
+	}
+	return true
 }
 
 // searchUser calls the undocumented search.modules API with module=people
