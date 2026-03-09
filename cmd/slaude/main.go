@@ -525,22 +525,23 @@ func promptChannel(workspace string) (string, string, error) {
 		channels, err = client.ListChannels(slackProgress)
 		fmt.Fprint(os.Stderr, "\r\033[K")
 	}
-	if err != nil {
-		return "", "", err
-	}
-	if len(channels) == 0 {
-		return "", "", fmt.Errorf("no channels found")
-	}
-
-	fmt.Println("📡 Pick a channel (or type @username for a DM):")
-	for i, ch := range channels {
-		name := ch.Name
-		if ch.Type == "channel" || ch.Type == "group" {
-			name = "#" + name
+	if err != nil || len(channels) == 0 {
+		// Can't list channels (enterprise restriction, etc.) — prompt manually
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Could not list channels: %v\n", err)
 		}
-		fmt.Printf("  %2d) %s\n", i+1, name)
+		fmt.Print("📡 Channel ID or URL (or @username for DM): ")
+	} else {
+		fmt.Println("📡 Pick a channel (or type @username for a DM):")
+		for i, ch := range channels {
+			name := ch.Name
+			if ch.Type == "channel" || ch.Type == "group" {
+				name = "#" + name
+			}
+			fmt.Printf("  %2d) %s\n", i+1, name)
+		}
+		fmt.Print("\n📡 Channel: ")
 	}
-	fmt.Print("\n📡 Channel: ")
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	line = strings.TrimSpace(line)
@@ -557,6 +558,20 @@ func promptChannel(workspace string) (string, string, error) {
 		return chID, "@" + strings.TrimPrefix(line, "@"), nil
 	}
 
+	// No channel list (enterprise, etc.) — treat input as channel ID or URL
+	if len(channels) == 0 {
+		// Try parsing as a Slack URL
+		if ch, _, _, _ := parseThreadURL(line); ch != "" {
+			return ch, ch, nil
+		}
+		line = strings.TrimPrefix(line, "#")
+		if isSlackID(line) {
+			return line, line, nil
+		}
+		return "", "", fmt.Errorf("expected a channel ID (e.g. C08HFRFLRC4) or Slack URL, got %q", line)
+	}
+
+	// Pick from numbered list
 	idx := 0
 	fmt.Sscanf(line, "%d", &idx)
 	idx--

@@ -20,10 +20,11 @@ import (
 
 // Client wraps an authenticated Slack client for channel and user resolution.
 type Client struct {
-	slack     *slackclient.Client
-	userCache map[string]string
-	mu        sync.Mutex
-	ownUserID string // set via auth.test for user/session tokens
+	slack        *slackclient.Client
+	userCache    map[string]string
+	mu           sync.Mutex
+	ownUserID    string // set via auth.test for user/session tokens
+	enterpriseID string // set when on enterprise grid (restricts some APIs)
 }
 
 // New creates a channel Client from an authenticated Slack client.
@@ -41,6 +42,7 @@ func New(c *slackclient.Client) (*Client, error) {
 			return nil, fmt.Errorf("auth.test: %w", err)
 		}
 		ch.ownUserID = resp.UserID
+		ch.enterpriseID = resp.EnterpriseID
 	}
 	return ch, nil
 }
@@ -48,6 +50,9 @@ func New(c *slackclient.Client) (*Client, error) {
 // ResolveChannelByName looks up a channel by name and returns its ID.
 // The input can be "#channel-name" or just "channel-name".
 func (c *Client) ResolveChannelByName(name string) (string, error) {
+	if c.enterpriseID != "" {
+		return "", ErrEnterprise
+	}
 	name = strings.TrimPrefix(name, "#")
 	params := &slackapi.GetConversationsForUserParameters{
 		Types: []string{"public_channel", "private_channel", "mpim"},
@@ -178,10 +183,17 @@ type ListProgress struct {
 	Total int // set during "checking" phase
 }
 
+// ErrEnterprise is returned when an API is restricted on enterprise grid workspaces.
+var ErrEnterprise = fmt.Errorf("enterprise grid workspace restricts this API")
+
 // ListChannels returns channels the user is a member of.
 // Channels/groups are always included. Group DMs (mpim) are filtered
 // to those with activity in the last 30 days.
 func (c *Client) ListChannels(progress func(ListProgress)) ([]Channel, error) {
+	if c.enterpriseID != "" {
+		return nil, ErrEnterprise
+	}
+
 	params := &slackapi.GetConversationsForUserParameters{
 		Types:           []string{"public_channel", "private_channel", "mpim"},
 		Limit:           200,
