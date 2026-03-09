@@ -28,6 +28,7 @@ type Config struct {
 	Channel        string
 	ChannelName    string   // display name (e.g. "#general" or "@haarchri")
 	ResumeThreadTS string   // Slack thread timestamp to resume
+	ResumeAfterTS  string   // skip messages up to this timestamp on resume
 	InstanceID     string   // slagent instance ID (for resume; empty = generate new)
 	OpenAccess     bool     // start with thread open for all participants
 	Debug          bool     // write raw JSON events to debug.log
@@ -42,6 +43,7 @@ type ResumeInfo struct {
 	ThreadTS   string
 	ThreadURL  string // Slack permalink (empty if unavailable)
 	InstanceID string
+	LastTS     string // cursor: last seen message timestamp
 }
 
 // Session is a running slaude session.
@@ -275,17 +277,13 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	defer proc.Stop()
 
 	// Resume or start Slack thread
-	var threadURL string
 	if sess.thread != nil {
 		if cfg.ResumeThreadTS != "" {
-			sess.thread.Resume(cfg.ResumeThreadTS)
-			threadURL = "(resumed)"
+			sess.thread.Resume(cfg.ResumeThreadTS, cfg.ResumeAfterTS)
 		} else {
-			url, err := sess.thread.Start(cfg.Topic)
-			if err != nil {
+			if _, err := sess.thread.Start(cfg.Topic); err != nil {
 				return nil, fmt.Errorf("start slack thread: %w", err)
 			}
-			threadURL = url
 		}
 	}
 
@@ -304,8 +302,10 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	}
 
 	// Build join command for the banner
-	if sess.thread != nil && threadURL != "" && threadURL != "(resumed)" {
-		bannerOpts.JoinCmd = fmt.Sprintf("slaude join %s", threadURL)
+	if sess.thread != nil {
+		if u := sess.thread.URL(); u != "" {
+			bannerOpts.JoinCmd = fmt.Sprintf("slaude join %s", u)
+		}
 	}
 	ui.Banner(bannerOpts)
 
@@ -399,8 +399,9 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 		SessionID:  proc.SessionID(),
 		Channel:    cfg.Channel,
 		ThreadTS:   sess.thread.ThreadTS(),
-		ThreadURL:  threadURL,
+		ThreadURL:  sess.thread.URL(),
 		InstanceID: sess.thread.InstanceID(),
+		LastTS:     sess.thread.LastTS(),
 	}
 
 	return resume, nil
@@ -691,7 +692,7 @@ func (s *Session) startThinking() slagent.Turn {
 		return nil
 	}
 	turn := s.thread.NewTurn()
-	turn.Thinking("thinking...")
+	turn.Thinking(" ")
 	return turn
 }
 

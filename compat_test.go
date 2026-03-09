@@ -882,3 +882,161 @@ func TestCompatFinishFullText(t *testing.T) {
 		t.Errorf("finished text should contain ending, got: %q", content)
 	}
 }
+
+func TestCompatThinkingShowsIdentityEmoji(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST", WithInstanceID("dog"))
+	thread.Resume("1700000001.000000")
+
+	turn := thread.NewTurn()
+	impl := turn.(*turnImpl)
+	w := impl.w.(*compatTurn)
+
+	turn.Thinking("analyzing...")
+
+	w.mu.Lock()
+	display := w.renderActivity()
+	w.mu.Unlock()
+
+	// Thinking line should show identity emoji + :claude:, not ":claude: _thinking..._"
+	if !strings.Contains(display, "🐶:claude:") {
+		t.Errorf("thinking should show identity emoji + :claude:, got: %q", display)
+	}
+	if strings.Contains(display, "_thinking..._") {
+		t.Error("thinking should not show '_thinking..._' text")
+	}
+}
+
+func TestCompatEarlyThinkingDeletedOnFinish(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST")
+	thread.Resume("1700000001.000000")
+
+	// Simulate early thinking: whitespace-only thinking, no text, no tools
+	turn := thread.NewTurn()
+	turn.Thinking(" ")
+	turn.Finish()
+
+	// Activity should be deleted (no real content in the turn)
+	active := mock.activeMessages()
+	for _, m := range active {
+		if m.Text == "activity" {
+			t.Error("early thinking activity should be deleted on finish when no real content follows")
+		}
+	}
+}
+
+func TestCompatEarlyThinkingReplacedByRealThinking(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST", WithInstanceID("fox_face"))
+	thread.Resume("1700000001.000000")
+
+	turn := thread.NewTurn()
+	impl := turn.(*turnImpl)
+	w := impl.w.(*compatTurn)
+
+	// Early thinking (whitespace sentinel)
+	turn.Thinking(" ")
+
+	// Real thinking arrives from Claude
+	turn.Thinking("Let me analyze the codebase")
+
+	w.mu.Lock()
+	display := w.renderActivity()
+	w.mu.Unlock()
+
+	// Should show identity emoji + :claude: header with real thinking content
+	if !strings.Contains(display, "🦊:claude:") {
+		t.Errorf("should show fox emoji, got: %q", display)
+	}
+	if !strings.Contains(display, "analyze the codebase") {
+		t.Errorf("should show real thinking text, got: %q", display)
+	}
+}
+
+func TestCompatEarlyThinkingThenTextDeletesActivity(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST")
+	thread.Resume("1700000001.000000")
+
+	// Early thinking → real thinking → text
+	turn := thread.NewTurn()
+	turn.Thinking(" ")
+	turn.Thinking("analyzing...")
+	turn.Text("Here is the result.")
+	turn.Finish()
+
+	// Activity should be deleted (text followed)
+	active := mock.activeMessages()
+	for _, m := range active {
+		if m.Text == "activity" {
+			t.Error("activity should be deleted when text follows")
+		}
+	}
+
+	// Text message should exist
+	textFound := false
+	for _, m := range active {
+		if strings.Contains(m.blockText(), "Here is the result") {
+			textFound = true
+		}
+	}
+	if !textFound {
+		t.Error("text message should exist")
+	}
+}
+
+func TestCompatEarlyThinkingThenToolPersists(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST")
+	thread.Resume("1700000001.000000")
+
+	// Early thinking → tool (no text) → finish
+	turn := thread.NewTurn()
+	turn.Thinking(" ")
+	turn.Tool("t1", "Read", ToolRunning, "main.go")
+	turn.Tool("t1", "Read", ToolDone, "main.go")
+	turn.Finish()
+
+	// Activity should persist (tool activity is meaningful content)
+	active := mock.activeMessages()
+	activityFound := false
+	for _, m := range active {
+		if m.Text == "activity" {
+			activityFound = true
+		}
+	}
+	if !activityFound {
+		t.Error("activity with tools should persist even with early thinking whitespace")
+	}
+}
+
+func TestCompatWhitespaceOnlyThinkingNoActivity(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST")
+	thread.Resume("1700000001.000000")
+
+	// Only whitespace thinking, nothing else — should clean up
+	turn := thread.NewTurn()
+	turn.Thinking("   \n  \n ")
+	turn.Finish()
+
+	active := mock.activeMessages()
+	for _, m := range active {
+		if m.Text == "activity" {
+			t.Error("whitespace-only thinking should be cleaned up on finish")
+		}
+	}
+}

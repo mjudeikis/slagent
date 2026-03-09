@@ -91,7 +91,7 @@ func (c *compatTurn) renderActivity() string {
 
 	// Thinking lines
 	if c.thinkBuf.Len() > 0 {
-		lines = append(lines, ":claude: _thinking..._")
+		lines = append(lines, c.emoji+":claude:")
 		thinkText := c.thinkBuf.String()
 		if len(thinkText) > 500 {
 			thinkText = "…" + thinkText[len(thinkText)-499:]
@@ -366,6 +366,13 @@ func (c *compatTurn) finish() error {
 	c.stopTimer()
 	c.stopActivityTimer()
 
+	// If no text and no real activity, delete the activity message (e.g. early thinking indicator)
+	finalText := strings.TrimLeft(c.textBuf.String(), "\n")
+	if finalText == "" && len(c.activities) == 0 && strings.TrimSpace(c.thinkBuf.String()) == "" {
+		c.deleteActivity()
+		return nil
+	}
+
 	// Final flush of activity (frozen as-is, no deletion)
 	c.postActivity()
 	if c.activityTS != "" {
@@ -383,7 +390,6 @@ func (c *compatTurn) finish() error {
 	}
 
 	// Update text message to full final response
-	finalText := strings.TrimLeft(c.textBuf.String(), "\n")
 	if finalText == "" {
 		return nil
 	}
