@@ -11,7 +11,7 @@
 
 [![Release](https://github.com/sttts/slagent/actions/workflows/release.yml/badge.svg)](https://github.com/sttts/slagent/actions/workflows/release.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/sttts/slagent)](https://goreportcard.com/report/github.com/sttts/slagent)
-[![License](https://img.shields.io/github/license/sttts/slagent)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Quick Start — slaude
 
