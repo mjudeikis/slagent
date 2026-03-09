@@ -80,6 +80,8 @@ Messages without prefix                  →  broadcast to all instances
 
 Regular messages with `:shortcode::` are delivered to all instances, but the system prompt tells non-targeted instances to ignore them. Commands (`/something`) are instance-exclusive — only the targeted instance receives them.
 
+**Important:** The colon after the emoji (`🦊:`) is required. Type `:fox_face::` in Slack (which renders as `🦊:`). Without the trailing colon, slaude will post a hint with the correct syntax.
+
 ### Thread Access Control
 
 Threads are locked to the owner by default. Use `/open` and `/lock` to control access (via `:shortcode::` targeting):

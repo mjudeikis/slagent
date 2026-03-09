@@ -320,6 +320,9 @@ Handled by `parseInstancePrefix()` in slagent's `thread.go`:
 4. Non-command messages are delivered to ALL instances with the original
    text (prefix included). The system prompt tells Claude to ignore
    messages prefixed with another instance's emoji.
+5. `mistargeted()` detects wrong syntax (`:fox_face: /cmd` with single
+   colon, or `🦊 /cmd` with Unicode emoji) and posts a hint suggesting
+   the correct `::` syntax. Only triggers for `/commands`.
 
 ### Session Handling
 

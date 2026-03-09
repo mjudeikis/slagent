@@ -127,6 +127,7 @@ Implementation:
 - `parseInstancePrefix()` in `thread.go`, used by `pollOnce()` in `reply.go`.
 - Non-command messages delivered to ALL instances; commands are instance-exclusive.
 - Unknown `/commands` forwarded to Claude via `Reply.Command`.
+- `mistargeted()` detects wrong syntax (Unicode emoji or single colon) and posts a hint.
 
 ## Thread Access Control
 See README.md for commands and title format.
