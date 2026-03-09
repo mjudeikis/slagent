@@ -254,6 +254,21 @@ func runSession(cfg session.Config) error {
 
 	// Print resume commands
 	if resume != nil && resume.SessionID != "" {
+		// Build flags to carry over (only non-default values)
+		var flags string
+		if cfg.Debug {
+			flags += " --debug"
+		}
+		if cfg.NoBye {
+			flags += " --no-bye"
+		}
+		if cfg.DangerousAutoApprove != "" && cfg.DangerousAutoApprove != "never" {
+			flags += " --dangerous-auto-approve " + cfg.DangerousAutoApprove
+		}
+		if cfg.DangerousAutoApproveNetwork != "" && cfg.DangerousAutoApproveNetwork != "never" {
+			flags += " --dangerous-auto-approve-network " + cfg.DangerousAutoApproveNetwork
+		}
+
 		fmt.Println()
 		fmt.Println("🔄 To resume this session:")
 		fmt.Println()
@@ -262,9 +277,9 @@ func runSession(cfg session.Config) error {
 			if resume.LastTS != "" {
 				frag += "@" + resume.LastTS
 			}
-			fmt.Printf("  slaude resume %s#%s -- --resume %s\n", resume.ThreadURL, frag, resume.SessionID)
+			fmt.Printf("  slaude resume%s %s#%s -- --resume %s\n", flags, resume.ThreadURL, frag, resume.SessionID)
 		} else {
-			fmt.Printf("  slaude resume (thread URL unavailable) -- --resume %s\n", resume.SessionID)
+			fmt.Printf("  slaude resume%s (thread URL unavailable) -- --resume %s\n", flags, resume.SessionID)
 		}
 		fmt.Println()
 		fmt.Println("🤖 To resume in Claude Code directly:")
