@@ -120,13 +120,29 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 			continue
 		}
 		if strings.EqualFold(text, "stop") {
-			// Targeted stop is instance-exclusive
 			if targeted && targetID != t.instanceID {
 				t.advanceLastTS(msg.Timestamp)
 				continue
 			}
 			user := t.resolveUser(msg.User)
 			replies = append(replies, Reply{User: user, UserID: msg.User, Stop: true})
+			t.advanceLastTS(msg.Timestamp)
+			continue
+		}
+
+		// "quit" terminates the session — owner only
+		if strings.EqualFold(text, "quit") {
+			if targeted && targetID != t.instanceID {
+				t.advanceLastTS(msg.Timestamp)
+				continue
+			}
+			if msg.User != t.ownerID {
+				t.Post("🚫 Only the session owner can quit.")
+				t.advanceLastTS(msg.Timestamp)
+				continue
+			}
+			user := t.resolveUser(msg.User)
+			replies = append(replies, Reply{User: user, UserID: msg.User, Quit: true})
 			t.advanceLastTS(msg.Timestamp)
 			continue
 		}

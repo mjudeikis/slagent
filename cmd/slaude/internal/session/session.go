@@ -54,6 +54,8 @@ type Session struct {
 	thread   *slagent.Thread
 	debugLog *os.File // debug.log file (nil when --debug is off)
 
+	cancel context.CancelFunc // cancels the session context
+
 	// Slack reply queue: replies collected between turns
 	replyMu     sync.Mutex
 	replies     []slagent.Reply
@@ -93,6 +95,7 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	sess := &Session{
 		cfg:         cfg,
 		ui:          ui,
+		cancel:      cancel,
 		replyNotify: make(chan struct{}, 1),
 		stopNotify:  make(chan struct{}, 1),
 	}
@@ -794,10 +797,18 @@ func (s *Session) pollSlack(ctx context.Context) {
 				continue
 			}
 
-			// Separate stop signals from regular replies
+			// Separate stop/quit signals from regular replies
 			hasStop := false
 			var regular []slagent.Reply
 			for _, r := range replies {
+				if r.Quit {
+					s.ui.Info("👋 Quit requested by " + r.User)
+					if s.thread != nil {
+						s.thread.Post("👋 Session ended by " + r.User)
+					}
+					s.cancel()
+					return
+				}
 				if r.Stop {
 					hasStop = true
 				} else {

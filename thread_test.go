@@ -1423,6 +1423,83 @@ func TestStopWithSpaces(t *testing.T) {
 	}
 }
 
+func TestQuitByOwner(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithInstanceID("dog"),
+		WithOwner("U_OWNER"),
+	)
+	thread.Start("Test")
+	threadTS := thread.ThreadTS()
+
+	mock.injectReply("C_TEST", threadTS, "U_OWNER", "quit")
+
+	replies, err := thread.PollReplies()
+	if err != nil {
+		t.Fatalf("PollReplies: %v", err)
+	}
+	if len(replies) != 1 {
+		t.Fatalf("replies = %d, want 1", len(replies))
+	}
+	if !replies[0].Quit {
+		t.Error("reply.Quit = false, want true")
+	}
+}
+
+func TestQuitByNonOwnerDenied(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithInstanceID("dog"),
+		WithOwner("U_OWNER"),
+	)
+	thread.Start("Test")
+	threadTS := thread.ThreadTS()
+
+	// Non-owner tries to quit — should be denied
+	mock.injectReply("C_TEST", threadTS, "U_OTHER", "quit")
+
+	replies, err := thread.PollReplies()
+	if err != nil {
+		t.Fatalf("PollReplies: %v", err)
+	}
+	if len(replies) != 0 {
+		t.Fatalf("replies = %d, want 0 (non-owner quit should be denied)", len(replies))
+	}
+}
+
+func TestQuitTargeted(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithInstanceID("dog"),
+		WithOwner("U_OWNER"),
+	)
+	thread.Start("Test")
+	threadTS := thread.ThreadTS()
+
+	// Targeted to another instance — ignored
+	mock.injectReply("C_TEST", threadTS, "U_OWNER", ":rhinoceros:: quit")
+
+	// Targeted to this instance — delivered
+	mock.injectReply("C_TEST", threadTS, "U_OWNER", ":dog:: quit")
+
+	replies, err := thread.PollReplies()
+	if err != nil {
+		t.Fatalf("PollReplies: %v", err)
+	}
+	if len(replies) != 1 {
+		t.Fatalf("replies = %d, want 1", len(replies))
+	}
+	if !replies[0].Quit {
+		t.Error("reply.Quit = false, want true")
+	}
+}
+
 func TestRepliesBlockingWithCancel(t *testing.T) {
 	mock := newMockSlack()
 	defer mock.close()

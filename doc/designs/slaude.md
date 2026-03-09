@@ -186,6 +186,16 @@ interrupts Claude's current turn. The mechanism:
 Bare `stop` interrupts all instances. Targeted `:emoji:: stop` is
 instance-exclusive (only the addressed instance receives it).
 
+Both `stop` and `help` bypass authorization — any thread participant can use
+them. This is a safety measure: anyone can stop an agent from doing something
+harmful.
+
+### Quit
+
+Typing `quit` (or `:emoji:: quit`) terminates the slaude session entirely.
+Only the session owner can quit. `pollSlack()` detects `Reply{Quit: true}`,
+posts a goodbye message, and cancels the session context.
+
 ### Tool Lifecycle
 
 Tools are tracked across their lifecycle in session.go:

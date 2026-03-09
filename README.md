@@ -110,6 +110,18 @@ Thread title reflects access state:
 - `🧵 @user1 @user2 Topic` — open for specific users
 - `🧵 Topic (🔒 @user)` — with banned users
 
+### Thread Commands
+
+| Command | Who | Effect |
+|---------|-----|--------|
+| `stop` | Anyone | Interrupt current turn (all instances) |
+| `:fox_face:: stop` | Anyone | Interrupt specific instance |
+| `quit` | Owner | Terminate session (all instances) |
+| `:fox_face:: quit` | Owner | Terminate specific instance |
+| `help` | Anyone | Show help text |
+
+Type `help` in any thread to see the full command reference.
+
 ## slagent Library
 
 slagent is the Go library that slaude is built on. Use it to build your own Slack-integrated agent UIs.
