@@ -346,6 +346,9 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 			bannerOpts.JoinCmd = fmt.Sprintf("slaude join %s", u)
 		}
 	}
+
+	// Auto-approve policy summary
+	bannerOpts.AutoApprove = autoApproveSummary(cfg.DangerousAutoApprove, cfg.DangerousAutoApproveNetwork)
 	ui.Banner(bannerOpts)
 
 	// Send initial topic (skip on resume or if no topic given)
@@ -652,6 +655,43 @@ func (s *Session) readTurn(earlyTurn ...slagent.Turn) error {
 		// Kick off next read
 		go readNext()
 	}
+}
+
+// autoApproveSummary returns a human-readable summary of the auto-approve policy.
+// Returns "" when both are "never" (all permissions go to Slack).
+func autoApproveSummary(level, network string) string {
+	if level == "" {
+		level = "never"
+	}
+	if network == "" {
+		network = "never"
+	}
+	if level == "never" && network == "never" {
+		return ""
+	}
+
+	var parts []string
+
+	// Sandbox level
+	switch level {
+	case "green":
+		parts = append(parts, "green (read-only)")
+	case "yellow":
+		parts = append(parts, "green+yellow (local ops)")
+	}
+
+	// Network level
+	switch network {
+	case "known":
+		parts = append(parts, "known hosts")
+	case "any":
+		parts = append(parts, "any network")
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, ", ")
 }
 
 // classification holds the AI-assessed risk of a permission request.

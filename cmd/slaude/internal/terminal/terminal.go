@@ -40,12 +40,13 @@ func NewWithWriter(w io.Writer) *UI {
 
 // BannerOpts configures the banner display.
 type BannerOpts struct {
-	Header   string // full header line (used on resume, e.g. "🐜🔒🧵 Testing")
-	Identity string // identity emoji + instance ID (e.g. "🐶 dog")
-	Topic    string // topic for new sessions
-	Channel  string
-	Access   string // access mode (e.g. "locked", "open")
-	JoinCmd  string // command to join this thread with a new slaude instance
+	Header      string // full header line (used on resume, e.g. "🐜🔒🧵 Testing")
+	Identity    string // identity emoji + instance ID (e.g. "🐶 dog")
+	Topic       string // topic for new sessions
+	Channel     string
+	Access      string // access mode (e.g. "locked", "open")
+	AutoApprove string // auto-approve policy summary (empty = all to Slack)
+	JoinCmd     string // command to join this thread with a new slaude instance
 }
 
 // Banner prints the session start info.
@@ -64,6 +65,9 @@ func (u *UI) Banner(opts BannerOpts) {
 	}
 	if opts.Access != "" {
 		fmt.Fprintf(u.w, "%s  🔐 Access:   %s%s\n", dim, opts.Access, reset)
+	}
+	if opts.AutoApprove != "" {
+		fmt.Fprintf(u.w, "%s  ⚡ Approve:  %s%s\n", dim, opts.AutoApprove, reset)
 	}
 	if opts.JoinCmd != "" {
 		fmt.Fprintf(u.w, "%s  🚀 Join:     %s%s\n", dim, opts.JoinCmd, reset)
