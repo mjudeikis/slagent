@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"io"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -109,6 +110,17 @@ func InstanceEmoji(instanceID string) string {
 		return e
 	}
 	return "🤖"
+}
+
+// ShortcodesToUnicode converts Slack shortcodes to Unicode emoji.
+// Handles :lock:, :thread:, and all identity emoji shortcodes.
+func ShortcodesToUnicode(text string) string {
+	text = strings.ReplaceAll(text, ":lock:", "🔒")
+	text = strings.ReplaceAll(text, ":thread:", "🧵")
+	for shortcode, emoji := range identityEmojis {
+		text = strings.ReplaceAll(text, ":"+shortcode+":", emoji)
+	}
+	return text
 }
 
 func defaultConfig() threadConfig {

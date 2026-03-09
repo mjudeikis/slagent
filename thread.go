@@ -594,7 +594,8 @@ func (t *Thread) formatTitle() string {
 		label += fmt.Sprintf(" (🔒 %s)", strings.Join(mentions, " "))
 	}
 
-	t.title = label
+	// t.title is for terminal display — convert shortcode to Unicode
+	t.title = ShortcodesToUnicode(label)
 	return label
 }
 
@@ -622,13 +623,7 @@ func (t *Thread) parseTitle(text string) {
 	t.bannedUsers = make(map[string]bool)
 
 	// Normalize shortcodes to Unicode for consistent parsing
-	text = strings.ReplaceAll(text, ":lock:", "🔒")
-	text = strings.ReplaceAll(text, ":thread:", "🧵")
-
-	// Convert identity emoji shortcodes (e.g. :ant: → 🐜)
-	for shortcode, emoji := range identityEmojis {
-		text = strings.ReplaceAll(text, ":"+shortcode+":", emoji)
-	}
+	text = ShortcodesToUnicode(text)
 	t.title = text
 
 	// 🔒🧵 means locked to owner; plain 🧵 means open or selective
