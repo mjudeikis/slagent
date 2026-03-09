@@ -137,6 +137,36 @@ func SetDefault(name string) error {
 	return saveStore(s)
 }
 
+// IsAuthError returns true if the error is a Slack authentication failure
+// (expired, revoked, or invalid token).
+func IsAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "invalid_auth") ||
+		strings.Contains(msg, "token_expired") ||
+		strings.Contains(msg, "token_revoked") ||
+		strings.Contains(msg, "not_authed") ||
+		strings.Contains(msg, "account_inactive")
+}
+
+// Ensure loads credentials for the workspace. If none exist, it calls extractFn
+// to obtain them (e.g. interactive auth). Returns an error if credentials are
+// still unavailable after extraction.
+func Ensure(workspace string, extractFn func() error) error {
+	if _, err := Load(workspace); err == nil {
+		return nil
+	}
+	if err := extractFn(); err != nil {
+		return err
+	}
+	if _, err := Load(workspace); err != nil {
+		return fmt.Errorf("credentials still unavailable after auth: %w", err)
+	}
+	return nil
+}
+
 // ListWorkspaces returns all workspace names sorted, with the default first.
 func ListWorkspaces() (names []string, defaultName string, err error) {
 	s, err := loadStore()

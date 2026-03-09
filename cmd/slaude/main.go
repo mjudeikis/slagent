@@ -133,11 +133,12 @@ func (cmd *StartCmd) Run() error {
 		}
 	}
 
-	// If no channel given, prompt with channel list when credentials exist
+	// If no channel given, ensure credentials exist then prompt with channel list
 	if cfg.Channel == "" {
-		if _, err := credential.Load(cfg.Workspace); err == nil {
-			cfg.Channel, cfg.ChannelName = promptChannel(cfg.Workspace)
+		if err := credential.Ensure(cfg.Workspace, interactiveAuth); err != nil {
+			return err
 		}
+		cfg.Channel, cfg.ChannelName = promptChannel(cfg.Workspace)
 	}
 
 	// If no topic given, prompt for one
@@ -428,16 +429,58 @@ func main() {
 	}
 }
 
+// interactiveAuth runs credential extraction with user-facing output.
+func interactiveAuth() error {
+	fmt.Println("No Slack credentials found. Let's set them up.")
+	fmt.Println()
+	if err := runAuthExtract(); err != nil {
+		return err
+	}
+	fmt.Println()
+	return nil
+}
+
+// interactiveReauth re-extracts credentials after a token failure.
+func interactiveReauth() error {
+	fmt.Println()
+	fmt.Println("🔄 Token expired or invalid. Re-extracting from Slack desktop app...")
+	fmt.Println()
+	if err := runAuthExtract(); err != nil {
+		return err
+	}
+	fmt.Println()
+	return nil
+}
+
 // promptChannel lists channels and lets the user pick one, or type @username for a DM.
 // Returns (channelID, displayName).
 func promptChannel(workspace string) (string, string) {
 	client, err := channel.New().WithWorkspace(workspace).Build()
+	if credential.IsAuthError(err) {
+		if interactiveReauth() != nil {
+			return "", ""
+		}
+		client, err = channel.New().WithWorkspace(workspace).Build()
+	}
 	if err != nil {
 		return "", ""
 	}
 
 	channels, err := client.ListChannels(slackProgress)
 	fmt.Fprint(os.Stderr, "\r\033[K")
+
+	// Re-extract credentials on auth failure and retry once
+	if credential.IsAuthError(err) {
+		if interactiveReauth() != nil {
+			return "", ""
+		}
+		client, err = channel.New().WithWorkspace(workspace).Build()
+		if err != nil {
+			return "", ""
+		}
+		channels, err = client.ListChannels(slackProgress)
+		fmt.Fprint(os.Stderr, "\r\033[K")
+	}
 	if err != nil || len(channels) == 0 {
 		return "", ""
 	}
