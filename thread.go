@@ -773,6 +773,49 @@ func (t *Thread) handleCommand(userID, cmd string) (bool, string) {
 	return true, feedback
 }
 
+// mistargeted checks if a message looks like a failed attempt at :shortcode:: targeting.
+// Detects two patterns:
+//   - ":fox_face: /cmd" — shortcode with single colon (missing trailing colon)
+//   - "🦊 /cmd" — Unicode emoji instead of shortcode syntax
+//
+// Returns a hint message or "" if no near-miss detected.
+func mistargeted(text string) string {
+	// Strip leading @mentions
+	s := text
+	for strings.HasPrefix(s, "<@") {
+		if idx := strings.Index(s, ">"); idx >= 0 {
+			s = strings.TrimLeft(s[idx+1:], " ")
+		} else {
+			break
+		}
+	}
+
+	// Pattern 1: ":shortcode: /cmd" (single colon, missing trailing colon)
+	if strings.HasPrefix(s, ":") {
+		end := strings.Index(s[1:], ":")
+		if end >= 0 {
+			shortcode := s[1 : end+1]
+			if _, ok := identityEmojis[shortcode]; ok {
+				rest := strings.TrimLeft(s[end+2:], " ")
+				if strings.HasPrefix(rest, "/") {
+					return fmt.Sprintf("💡 Use `:%s:: %s` (with `::`) to target an instance.", shortcode, rest)
+				}
+			}
+		}
+	}
+
+	// Pattern 2: "🦊 /cmd" or "🦊: /cmd" (Unicode emoji, with optional colon/spaces)
+	for emoji, shortcode := range reverseEmojis {
+		if strings.HasPrefix(s, emoji) {
+			rest := strings.TrimLeft(s[len(emoji):], ": ")
+			if strings.HasPrefix(rest, "/") {
+				return fmt.Sprintf("💡 Use `:%s:: %s` (with `::`) to target an instance.", shortcode, rest)
+			}
+		}
+	}
+	return ""
+}
+
 // parseMention extracts a user ID from a Slack mention ("<@U123>").
 func parseMention(s string) string {
 	if strings.HasPrefix(s, "<@") && strings.HasSuffix(s, ">") {

@@ -103,6 +103,16 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 
 		// Parse :shortcode:: prefix targeting
 		targetID, rest, targeted := parseMessage(msg.Text)
+
+		// Detect near-miss targeting (wrong syntax) and give feedback
+		if !targeted {
+			if hint := mistargeted(msg.Text); hint != "" {
+				t.Post(hint)
+				t.advanceLastTS(msg.Timestamp)
+				continue
+			}
+		}
+
 		if targeted && strings.HasPrefix(rest, "/") {
 			// Commands are instance-exclusive
 			if targetID != t.instanceID {

@@ -79,10 +79,15 @@ var identityEmojis = map[string]string{
 // identityKeys is the sorted list of short codes for random selection.
 var identityKeys []string
 
+// reverseEmojis maps Unicode emoji → shortcode for near-miss detection.
+var reverseEmojis map[string]string
+
 func init() {
 	identityKeys = make([]string, 0, len(identityEmojis))
-	for k := range identityEmojis {
+	reverseEmojis = make(map[string]string, len(identityEmojis))
+	for k, v := range identityEmojis {
 		identityKeys = append(identityKeys, k)
+		reverseEmojis[v] = k
 	}
 	// Sort for deterministic ordering
 	sort.Strings(identityKeys)

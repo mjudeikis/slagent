@@ -561,6 +561,81 @@ func TestUnauthorizedMessageFeedback(t *testing.T) {
 	}
 }
 
+func TestMistargeted(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantHint bool
+	}{
+		// Near-miss: single colon + command
+		{":fox_face: /compact", true},
+		{":dog: /open", true},
+		{"<@U123> :fox_face: /compact", true},
+
+		// Near-miss: Unicode emoji + command (with various spacing/colons)
+		{"🦊 /compact", true},
+		{"🦊  /compact", true},
+		{"🦊: /compact", true},
+		{"🐶 /open", true},
+
+		// Correct syntax — not a near-miss
+		{":fox_face:: /compact", false},
+
+		// Not a command — no hint needed
+		{":fox_face: hello", false},
+		{"🦊 hello", false},
+
+		// Unknown emoji — no hint
+		{":not_an_emoji: /compact", false},
+		{"😀 /compact", false},
+
+		// Plain text
+		{"hello world", false},
+	}
+	for _, tt := range tests {
+		hint := mistargeted(tt.input)
+		if tt.wantHint && hint == "" {
+			t.Errorf("mistargeted(%q) = empty, want hint", tt.input)
+		}
+		if !tt.wantHint && hint != "" {
+			t.Errorf("mistargeted(%q) = %q, want empty", tt.input, hint)
+		}
+	}
+}
+
+func TestMistargetedFeedbackPosted(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Inject a near-miss message: Unicode emoji + command
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OWNER", "🦊 /compact")
+	replies, err := thread.PollReplies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replies) != 0 {
+		t.Errorf("near-miss should not produce replies, got %d", len(replies))
+	}
+
+	// Check feedback was posted
+	msgs := mock.activeMessages()
+	var found bool
+	for _, m := range msgs {
+		if strings.Contains(m.Text, "::") && strings.Contains(m.Text, "fox_face") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("near-miss feedback should be posted")
+	}
+}
+
 func TestParseMention(t *testing.T) {
 	tests := []struct {
 		input string
