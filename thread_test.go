@@ -445,8 +445,8 @@ func TestHandleCommandUnknownCommand(t *testing.T) {
 	if handled, _ := thread.handleCommand("U_OWNER", "/unknown"); handled {
 		t.Error("/unknown should not be handled")
 	}
-	if handled, _ := thread.handleCommand("U_OWNER", "/help"); handled {
-		t.Error("/help should not be handled")
+	if handled, _ := thread.handleCommand("U_OWNER", "/status"); handled {
+		t.Error("/status should not be handled")
 	}
 }
 
@@ -558,6 +558,69 @@ func TestUnauthorizedMessageFeedback(t *testing.T) {
 	}
 	if !found {
 		t.Error("unauthorized feedback should be posted")
+	}
+}
+
+func TestHelpCommand(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// /help via targeted command
+	handled, feedback := thread.handleCommand("U_OWNER", "/help")
+	if !handled {
+		t.Error("/help should be handled")
+	}
+	if !strings.Contains(feedback, "slaude") || !strings.Contains(feedback, "/open") {
+		t.Errorf("/help feedback should contain usage info, got %q", feedback)
+	}
+
+	// /help from non-owner should also work (not restricted)
+	handled, feedback = thread.handleCommand("U_OTHER", "/help")
+	if !handled {
+		t.Error("/help from non-owner should be handled")
+	}
+	if !strings.Contains(feedback, "slaude") {
+		t.Errorf("/help from non-owner should still show help, got %q", feedback)
+	}
+}
+
+func TestBareHelpMessage(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Bare "help" message
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OTHER", "help")
+	replies, err := thread.PollReplies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replies) != 0 {
+		t.Errorf("bare help should not produce replies, got %d", len(replies))
+	}
+
+	// Check help text was posted
+	msgs := mock.activeMessages()
+	var found bool
+	for _, m := range msgs {
+		if strings.Contains(m.Text, "slaude") && strings.Contains(m.Text, "/open") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("help text should be posted for bare 'help' message")
 	}
 }
 

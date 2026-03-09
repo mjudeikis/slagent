@@ -710,6 +710,8 @@ func (t *Thread) handleCommand(userID, cmd string) (bool, string) {
 	}
 
 	switch parts[0] {
+	case "/help":
+		return true, t.helpText()
 	case "/open":
 		// allow
 	case "/lock", "/close":
@@ -814,6 +816,32 @@ func mistargeted(text string) string {
 		}
 	}
 	return ""
+}
+
+// helpText returns the help message for the thread.
+func (t *Thread) helpText() string {
+	emoji := t.emoji
+	id := t.instanceID
+	return fmt.Sprintf(""+
+		"*slaude — thread commands*\n"+
+		"\n"+
+		"*Targeting* (type `:%s::` in Slack, renders as %s:)\n"+
+		"  `:%s:: message` — address this instance\n"+
+		"  `:%s:: /command` — send command exclusively to this instance\n"+
+		"  Messages without prefix are broadcast to all instances.\n"+
+		"\n"+
+		"*Access control* (owner only)\n"+
+		"  `:%s:: /open` — open thread for everyone\n"+
+		"  `:%s:: /open @user` — allow specific users\n"+
+		"  `:%s:: /lock` — lock to owner only\n"+
+		"  `:%s:: /lock @user` — ban specific users\n"+
+		"  `:%s:: /close` — alias for /lock\n"+
+		"\n"+
+		"*Other*\n"+
+		"  `:%s:: /help` — show this help\n"+
+		"  Other `/commands` are forwarded to Claude.",
+		id, emoji,
+		id, id, id, id, id, id, id, id)
 }
 
 // parseMention extracts a user ID from a Slack mention ("<@U123>").

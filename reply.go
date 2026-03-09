@@ -104,6 +104,13 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 		// Parse :shortcode:: prefix targeting
 		targetID, rest, targeted := parseMessage(msg.Text)
 
+		// Bare "help" from anyone → post help text
+		if strings.EqualFold(strings.TrimSpace(msg.Text), "help") {
+			t.Post(t.helpText())
+			t.advanceLastTS(msg.Timestamp)
+			continue
+		}
+
 		// Detect near-miss targeting (wrong syntax) and give feedback
 		if !targeted {
 			if hint := mistargeted(msg.Text); hint != "" {
