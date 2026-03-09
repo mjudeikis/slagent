@@ -277,9 +277,9 @@ func runSession(cfg session.Config) error {
 			if resume.LastTS != "" {
 				frag += "@" + resume.LastTS
 			}
-			fmt.Printf("  slaude resume%s %s#%s -- --resume %s\n", flags, resume.ThreadURL, frag, resume.SessionID)
+			fmt.Printf("  %s resume%s %s#%s -- --resume %s\n", os.Args[0], flags, resume.ThreadURL, frag, resume.SessionID)
 		} else {
-			fmt.Printf("  slaude resume%s (thread URL unavailable) -- --resume %s\n", flags, resume.SessionID)
+			fmt.Printf("  %s resume%s (thread URL unavailable) -- --resume %s\n", os.Args[0], flags, resume.SessionID)
 		}
 		fmt.Println()
 		fmt.Println("🤖 To resume in Claude Code directly:")
