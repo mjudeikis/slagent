@@ -31,6 +31,7 @@ type Config struct {
 	ResumeAfterTS  string   // skip messages up to this timestamp on resume
 	InstanceID     string   // slagent instance ID (for resume; empty = generate new)
 	OpenAccess     bool     // start with thread open for all participants
+	ClosedAccess   bool     // override inherited access to locked (join/resume)
 	Debug          bool     // write raw JSON events to debug.log
 	Workspace      string   // Slack workspace (empty = default)
 	ClaudeArgs     []string // pass-through args for Claude subprocess
@@ -290,6 +291,9 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	if sess.thread != nil {
 		if cfg.ResumeThreadTS != "" {
 			sess.thread.Resume(cfg.ResumeThreadTS, cfg.ResumeAfterTS)
+			if cfg.ClosedAccess {
+				sess.thread.SetClosed()
+			}
 		} else {
 			if _, err := sess.thread.Start(cfg.Topic); err != nil {
 				return nil, fmt.Errorf("start slack thread: %w", err)
@@ -311,9 +315,10 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 		Channel: channelDisplay,
 	}
 
-	// Build identity and join command for the banner
+	// Build identity, access mode, and join command for the banner
 	if sess.thread != nil {
 		bannerOpts.Identity = fmt.Sprintf("%s %s", sess.thread.Emoji(), sess.thread.InstanceID())
+		bannerOpts.Access = sess.thread.AccessMode()
 		if u := sess.thread.URL(); u != "" {
 			bannerOpts.JoinCmd = fmt.Sprintf("slaude join %s", u)
 		}

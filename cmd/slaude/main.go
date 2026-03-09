@@ -43,6 +43,7 @@ type StartCmd struct {
 type JoinCmd struct {
 	URL        string   `arg:"" help:"Slack thread URL to join."`
 	Topic      []string `arg:"" optional:"" help:"Planning topic."`
+	Closed     bool     `help:"Start locked to owner only, ignoring thread access state."`
 	Debug      bool     `help:"Print raw JSON events from Claude to terminal."`
 	ClaudeArgs []string `name:"-" hidden:""`
 }
@@ -50,6 +51,7 @@ type JoinCmd struct {
 // ResumeCmd resumes an existing session in a Slack thread.
 type ResumeCmd struct {
 	URL        string   `arg:"" help:"Slack thread URL with #instanceID fragment."`
+	Closed     bool     `help:"Start locked to owner only, ignoring thread access state."`
 	Debug      bool     `help:"Print raw JSON events from Claude to terminal."`
 	ClaudeArgs []string `name:"-" hidden:""`
 }
@@ -162,6 +164,7 @@ func (cmd *JoinCmd) Run() error {
 		Topic:          strings.Join(cmd.Topic, " "),
 		Channel:        ch,
 		ResumeThreadTS: threadTS,
+		ClosedAccess:   cmd.Closed,
 		Debug:          cmd.Debug,
 		Workspace:      cli.Workspace,
 		ClaudeArgs:     cmd.ClaudeArgs,
@@ -185,6 +188,7 @@ func (cmd *ResumeCmd) Run() error {
 		ResumeThreadTS: threadTS,
 		ResumeAfterTS:  afterTS,
 		InstanceID:     instanceID,
+		ClosedAccess:   cmd.Closed,
 		Debug:          cmd.Debug,
 		Workspace:      cli.Workspace,
 		ClaudeArgs:     cmd.ClaudeArgs,

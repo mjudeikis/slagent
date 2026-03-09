@@ -119,6 +119,7 @@ type Thread struct {
 	allowedUsers map[string]bool // specific users allowed when not fully open
 	bannedUsers  map[string]bool // explicitly banned users (override openAccess)
 	title        string         // thread title (for access state in parent message)
+	joined       bool           // true if joined/resumed (don't persist access to title)
 
 	// Reply tracking
 	lastTS string
@@ -209,6 +210,7 @@ func (t *Thread) Resume(threadTS string, afterTS ...string) {
 	t.mu.Lock()
 	t.threadTS = threadTS
 	t.lastTS = threadTS
+	t.joined = true
 	t.mu.Unlock()
 
 	// If caller provides a cursor, use it and only fetch the parent for title
@@ -683,6 +685,29 @@ func (t *Thread) updateTitle() {
 	)
 }
 
+// SetClosed resets the access state to locked (owner only).
+// Use this to override inherited access from the thread title on join/resume.
+func (t *Thread) SetClosed() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.openAccess = false
+	t.allowedUsers = make(map[string]bool)
+	t.bannedUsers = make(map[string]bool)
+}
+
+// AccessMode returns a human-readable description of the current access state.
+func (t *Thread) AccessMode() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.openAccess {
+		return "open"
+	}
+	if len(t.allowedUsers) > 0 {
+		return fmt.Sprintf("restricted (%d users)", len(t.allowedUsers))
+	}
+	return "locked"
+}
+
 // isAuthorized checks whether a user is allowed to interact.
 func (t *Thread) isAuthorized(userID string) bool {
 	t.mu.Lock()
@@ -832,8 +857,10 @@ func (t *Thread) handleCommand(userID, cmd string) (bool, string) {
 	}
 	t.mu.Unlock()
 
-	// Update thread parent to reflect new access state
-	t.updateTitle()
+	// Update thread parent to reflect new access state (only if we created the thread)
+	if !t.joined {
+		t.updateTitle()
+	}
 	return true, feedback
 }
 

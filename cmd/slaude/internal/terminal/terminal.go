@@ -43,6 +43,7 @@ type BannerOpts struct {
 	Topic    string
 	Channel  string
 	Identity string // identity emoji + instance ID (e.g. "🐶 dog")
+	Access   string // access mode (e.g. "locked", "open")
 	JoinCmd  string // command to join this thread with a new slaude instance
 }
 
@@ -58,6 +59,9 @@ func (u *UI) Banner(opts BannerOpts) {
 	}
 	if opts.Channel != "" {
 		fmt.Fprintf(u.w, "%s  💬 Channel:  %s%s\n", dim, opts.Channel, reset)
+	}
+	if opts.Access != "" {
+		fmt.Fprintf(u.w, "%s  🔐 Access:   %s%s\n", dim, opts.Access, reset)
 	}
 	if opts.JoinCmd != "" {
 		fmt.Fprintf(u.w, "%s  🚀 Join:     %s%s\n", dim, opts.JoinCmd, reset)
