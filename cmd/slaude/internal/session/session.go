@@ -227,9 +227,9 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 				"- :%s:: /command sends a slash command exclusively to you.\n"+
 				"- Messages without :emoji:: prefix are broadcast to all instances.\n\n"+
 				"Behavior rules:\n"+
-				"- Do NOT acknowledge every message. Only respond when you have something substantive.\n"+
-					"- Be concise. Slack readers prefer short, focused responses.\n"+
-				"- Do not greet or say hello in response to feedback. Just act on it.\n"+
+				"- On join, produce ZERO output. Wait silently until someone addresses you.\n"+
+				"- Only respond to messages directed to you or broadcast. Never greet or say hello.\n"+
+				"- Be concise. Slack readers prefer short, focused responses.\n"+
 				"- When outputting tabular data with columns, always wrap it in a code block (```) so it renders with fixed-width alignment in Slack."+
 				"%s",
 			emoji, instanceID, emoji, instanceID, instanceID, instanceID, instanceID, ownerCtx)
@@ -641,6 +641,12 @@ const permissionTimeout = 5 * time.Minute
 // handlePermission processes a permission request from the MCP server by posting
 // to Slack and polling for owner approval via reactions.
 func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.PermissionResponse {
+	if s.debugLog != nil {
+		raw, _ := json.Marshal(req)
+		fmt.Fprintf(s.debugLog, "permission_request: %s\n", raw)
+		s.ui.Info(fmt.Sprintf("  🔐 Raw: %s", raw))
+	}
+
 	detail := toolDetail(req.ToolName, string(req.Input))
 	prompt := fmt.Sprintf("🔐 *Permission request*: %s", req.ToolName)
 	if detail != "" {
