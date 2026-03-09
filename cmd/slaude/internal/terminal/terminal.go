@@ -43,6 +43,7 @@ type BannerOpts struct {
 	Header      string // full header line (used on resume, e.g. "🐜🔒🧵 Testing")
 	Identity    string // identity emoji + instance ID (e.g. "🐶 dog")
 	Topic       string // topic for new sessions
+	User        string // Slack identity (e.g. "@sschimanski on myteam")
 	Channel     string
 	Access      string // access mode (e.g. "locked", "open")
 	AutoApprove string // auto-approve policy summary (empty = all to Slack)
@@ -59,6 +60,9 @@ func (u *UI) Banner(opts BannerOpts) {
 			fmt.Fprintf(u.w, " %s", opts.Topic)
 		}
 		fmt.Fprintln(u.w)
+	}
+	if opts.User != "" {
+		fmt.Fprintf(u.w, "%s  👤 User:     %s%s\n", dim, opts.User, reset)
 	}
 	if opts.Channel != "" {
 		fmt.Fprintf(u.w, "%s  💬 Channel:  %s%s\n", dim, opts.Channel, reset)

@@ -63,7 +63,8 @@ type Session struct {
 	thread   *slagent.Thread
 	debugLog *os.File // debug.log file (nil when --debug is off)
 
-	cancel context.CancelFunc // cancels the session context
+	cancel    context.CancelFunc // cancels the session context
+	slackUser string             // Slack identity for banner (e.g. "@user on team")
 
 	// Slack reply queue: replies collected between turns
 	replyMu     sync.Mutex
@@ -167,6 +168,17 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 		resp, err := client.AuthTest()
 		if err == nil && resp.UserID != "" {
 			opts = append(opts, slagent.WithOwner(resp.UserID))
+		}
+
+		// Store Slack identity for banner display
+		if err == nil {
+			if resp.URL != "" {
+				sess.slackUser = fmt.Sprintf("@%s on %s (%s)", resp.User, resp.Team, resp.URL)
+			} else if resp.Team != "" {
+				sess.slackUser = fmt.Sprintf("@%s on %s", resp.User, resp.Team)
+			} else {
+				sess.slackUser = "@" + resp.User
+			}
 		}
 
 		// Pass instance ID for block_id tagging (empty = generate new)
@@ -338,6 +350,7 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	}
 
 	// Build identity, access mode, and join command for the banner
+	bannerOpts.User = sess.slackUser
 	if sess.thread != nil {
 		bannerOpts.Identity = fmt.Sprintf("%s %s", sess.thread.Emoji(), sess.thread.InstanceID())
 		bannerOpts.Header = sess.thread.Title()
