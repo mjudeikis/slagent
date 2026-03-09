@@ -841,7 +841,7 @@ func TestThreadStartAndResume(t *testing.T) {
 		t.Error("ThreadTS is empty after Start")
 	}
 
-	// Resume
+	// Resume without cursor — advances lastTS to latest reply
 	thread2 := NewThread(mock.client(), "xoxc-test", "C_TEST")
 	thread2.Resume("1700000001.000000")
 	if thread2.ThreadTS() != "1700000001.000000" {
@@ -1374,6 +1374,89 @@ func TestPollRepliesEmojiPrefixCommand(t *testing.T) {
 	}
 	if replies[0].Text != "" {
 		t.Errorf("replies[0].Text = %q, want empty", replies[0].Text)
+	}
+}
+
+func TestResumeWithAfterTS(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	// Post a thread with replies
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST", WithInstanceID("dog"), WithOwner("U_OWNER"))
+	thread.Start("Test Plan")
+	thread.Post("first reply")
+	thread.Post("second reply")
+
+	// Resume with explicit afterTS — should skip all messages up to that point
+	thread2 := NewThread(mock.client(), "xoxc-test", "C_TEST", WithInstanceID("dog"), WithOwner("U_OWNER"))
+	thread2.Resume(thread.ThreadTS(), "1700000099.000000")
+
+	if thread2.LastTS() != "1700000099.000000" {
+		t.Errorf("LastTS = %q, want 1700000099.000000", thread2.LastTS())
+	}
+}
+
+func TestResumeWithoutAfterTSAdvancesToLatest(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	// Post a thread with replies
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST", WithInstanceID("dog"), WithOwner("U_OWNER"))
+	thread.Start("Test Plan")
+	thread.Post("first reply")
+	thread.Post("second reply")
+
+	// Capture the latest message TS
+	active := mock.activeMessages()
+	latestTS := active[len(active)-1].TS
+
+	// Resume without afterTS — should advance to latest reply
+	thread2 := NewThread(mock.client(), "xoxc-test", "C_TEST", WithInstanceID("dog"), WithOwner("U_OWNER"))
+	thread2.Resume(thread.ThreadTS())
+
+	if thread2.LastTS() != latestTS {
+		t.Errorf("LastTS = %q, want %q (latest message)", thread2.LastTS(), latestTS)
+	}
+}
+
+func TestResumeWithAfterTSSkipsOldReplies(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	// Post a thread with messages
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST", WithInstanceID("dog"), WithOwner("U_OWNER"))
+	thread.Start("Test Plan")
+	threadTS := thread.ThreadTS()
+
+	// Simulate old messages
+	mock.injectReply("C_TEST", threadTS, "U_OWNER", ":dog:: /open")
+	mock.injectReply("C_TEST", threadTS, "U_OWNER", "old feedback")
+
+	// Get the TS of the last old message
+	active := mock.activeMessages()
+	lastOldTS := active[len(active)-1].TS
+
+	// Resume with afterTS set to last old message
+	thread2 := NewThread(mock.client(), "xoxc-test", "C_TEST", WithInstanceID("dog"), WithOwner("U_OWNER"))
+	thread2.Resume(threadTS, lastOldTS)
+
+	// Poll should return nothing (all messages are before afterTS)
+	replies, err := thread2.PollReplies()
+	if err != nil {
+		t.Fatalf("PollReplies: %v", err)
+	}
+	if len(replies) != 0 {
+		t.Errorf("expected 0 replies after resume with afterTS, got %d", len(replies))
+	}
+
+	// New message after resume should be visible
+	mock.injectReply("C_TEST", threadTS, "U_OWNER", "new feedback")
+	replies, err = thread2.PollReplies()
+	if err != nil {
+		t.Fatalf("PollReplies: %v", err)
+	}
+	if len(replies) != 1 {
+		t.Errorf("expected 1 new reply, got %d", len(replies))
 	}
 }
 

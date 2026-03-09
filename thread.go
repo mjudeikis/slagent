@@ -194,27 +194,57 @@ func (t *Thread) Start(title string) (string, error) {
 	if err != nil {
 		return fmt.Sprintf("(thread started, permalink unavailable: %v)", err), nil
 	}
+
+	// Strip query string — we only need the path
+	if idx := strings.Index(link, "?"); idx >= 0 {
+		link = link[:idx]
+	}
 	return link, nil
 }
 
 // Resume attaches to an existing thread and recovers access state from the title.
-func (t *Thread) Resume(threadTS string) {
+// If afterTS is provided, it is used as the cursor position (skipping all messages
+// up to that point). Otherwise, the latest reply is fetched from Slack.
+func (t *Thread) Resume(threadTS string, afterTS ...string) {
 	t.mu.Lock()
 	t.threadTS = threadTS
 	t.lastTS = threadTS
 	t.mu.Unlock()
 
-	// Read thread parent to recover access state from title
+	// If caller provides a cursor, use it and only fetch the parent for title
+	if len(afterTS) > 0 && afterTS[0] != "" {
+		params := &slackapi.GetConversationRepliesParameters{
+			ChannelID: t.channel,
+			Timestamp: threadTS,
+			Limit:     1,
+		}
+		msgs, _, _, err := t.api.GetConversationReplies(params)
+		if err == nil && len(msgs) > 0 {
+			t.parseTitle(msgs[0].Text)
+		}
+		t.mu.Lock()
+		t.lastTS = afterTS[0]
+		t.mu.Unlock()
+		return
+	}
+
+	// No cursor — fetch replies and advance to the latest
 	params := &slackapi.GetConversationRepliesParameters{
 		ChannelID: t.channel,
 		Timestamp: threadTS,
-		Limit:     1,
 	}
 	msgs, _, _, err := t.api.GetConversationReplies(params)
 	if err != nil || len(msgs) == 0 {
 		return
 	}
 	t.parseTitle(msgs[0].Text)
+
+	// Advance past all existing replies
+	if latest := msgs[len(msgs)-1].Timestamp; latest > threadTS {
+		t.mu.Lock()
+		t.lastTS = latest
+		t.mu.Unlock()
+	}
 }
 
 // NewTurn begins a new response turn.
@@ -455,6 +485,37 @@ func (t *Thread) ThreadTS() string {
 // Channel returns the channel ID.
 func (t *Thread) Channel() string {
 	return t.channel
+}
+
+// LastTS returns the timestamp of the last seen message.
+func (t *Thread) LastTS() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastTS
+}
+
+// URL returns the Slack permalink for this thread.
+func (t *Thread) URL() string {
+	t.mu.Lock()
+	ts := t.threadTS
+	t.mu.Unlock()
+
+	if ts == "" {
+		return ""
+	}
+	link, err := t.api.GetPermalink(&slackapi.PermalinkParameters{
+		Channel: t.channel,
+		Ts:      ts,
+	})
+	if err != nil {
+		return ""
+	}
+
+	// Strip query string — we only need the path
+	if idx := strings.Index(link, "?"); idx >= 0 {
+		link = link[:idx]
+	}
+	return link
 }
 
 // resolveUser resolves a user ID to a display name, with caching.

@@ -54,14 +54,20 @@ type ResumeCmd struct {
 	ClaudeArgs []string `name:"-" hidden:""`
 }
 
-// parseThreadURL parses a Slack permalink URL into channel and thread timestamp.
-// Format: https://workspace.slack.com/archives/CHANNEL/pTIMESTAMP[#instanceID]
-// Returns (channel, threadTS, instanceID).
-func parseThreadURL(value string) (ch, threadTS, instanceID string) {
-	// Extract instance ID from URL fragment (#instanceID)
+// parseThreadURL parses a Slack permalink URL into channel, thread timestamp,
+// instance ID, and optional cursor timestamp.
+// Format: https://workspace.slack.com/archives/CHANNEL/pTIMESTAMP[#instanceID[@lastTS]]
+func parseThreadURL(value string) (ch, threadTS, instanceID, afterTS string) {
+	// Extract fragment (#instanceID[@lastTS])
 	if idx := strings.LastIndex(value, "#"); idx >= 0 {
-		instanceID = value[idx+1:]
+		frag := value[idx+1:]
 		value = value[:idx]
+		if at := strings.Index(frag, "@"); at >= 0 {
+			instanceID = frag[:at]
+			afterTS = frag[at+1:]
+		} else {
+			instanceID = frag
+		}
 	}
 
 	parts := strings.Split(value, "/")
@@ -85,7 +91,7 @@ func parseThreadURL(value string) (ch, threadTS, instanceID string) {
 			return
 		}
 	}
-	return "", "", instanceID
+	return "", "", instanceID, afterTS
 }
 
 func (cmd *StartCmd) Run() error {
@@ -146,7 +152,7 @@ func (cmd *StartCmd) Run() error {
 }
 
 func (cmd *JoinCmd) Run() error {
-	ch, threadTS, _ := parseThreadURL(cmd.URL)
+	ch, threadTS, _, _ := parseThreadURL(cmd.URL)
 	if ch == "" || threadTS == "" {
 		return fmt.Errorf("invalid thread URL: %s", cmd.URL)
 	}
@@ -165,7 +171,7 @@ func (cmd *JoinCmd) Run() error {
 }
 
 func (cmd *ResumeCmd) Run() error {
-	ch, threadTS, instanceID := parseThreadURL(cmd.URL)
+	ch, threadTS, instanceID, afterTS := parseThreadURL(cmd.URL)
 	if ch == "" || threadTS == "" {
 		return fmt.Errorf("invalid thread URL: %s", cmd.URL)
 	}
@@ -176,6 +182,7 @@ func (cmd *ResumeCmd) Run() error {
 	cfg := session.Config{
 		Channel:        ch,
 		ResumeThreadTS: threadTS,
+		ResumeAfterTS:  afterTS,
 		InstanceID:     instanceID,
 		Debug:          cmd.Debug,
 		Workspace:      cli.Workspace,
@@ -199,13 +206,19 @@ func runSession(cfg session.Config) error {
 	if resume != nil && resume.SessionID != "" {
 		fmt.Println()
 		fmt.Println("🔄 To resume this session:")
+		fmt.Println()
 		if resume.ThreadURL != "" && resume.InstanceID != "" {
-			fmt.Printf("  slaude resume %s#%s -- --resume %s\n", resume.ThreadURL, resume.InstanceID, resume.SessionID)
+			frag := resume.InstanceID
+			if resume.LastTS != "" {
+				frag += "@" + resume.LastTS
+			}
+			fmt.Printf("  slaude resume %s#%s -- --resume %s\n", resume.ThreadURL, frag, resume.SessionID)
 		} else {
 			fmt.Printf("  slaude resume (thread URL unavailable) -- --resume %s\n", resume.SessionID)
 		}
 		fmt.Println()
 		fmt.Println("🤖 To resume in Claude Code directly:")
+		fmt.Println()
 		fmt.Printf("  claude --resume %s\n", resume.SessionID)
 	}
 
