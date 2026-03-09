@@ -700,12 +700,13 @@ func parseMessage(text string) (instanceID, cleaned string, targeted bool) {
 // /lock — lock to owner only (clears allowed and banned users)
 // /lock <@U1> <@U2> — ban specific users
 // /close — alias for /lock
-// Returns true if the message was a known command.
-func (t *Thread) handleCommand(userID, cmd string) bool {
+// Returns (handled, feedback): handled is true for known commands,
+// feedback is a status message to post in the thread.
+func (t *Thread) handleCommand(userID, cmd string) (bool, string) {
 	cmd = strings.TrimSpace(cmd)
 	parts := strings.Fields(cmd)
 	if len(parts) == 0 {
-		return false
+		return false, ""
 	}
 
 	switch parts[0] {
@@ -714,31 +715,36 @@ func (t *Thread) handleCommand(userID, cmd string) bool {
 	case "/lock", "/close":
 		// allow
 	default:
-		return false
+		return false, ""
 	}
 
 	// Only the owner can run access commands
 	t.mu.Lock()
 	if t.ownerID != "" && userID != t.ownerID {
 		t.mu.Unlock()
-		return false
+		return true, "🚫 Only the thread owner can use access commands."
 	}
 
+	var feedback string
 	switch parts[0] {
 	case "/open":
 		if len(parts) == 1 {
 			// /open — open for everyone
 			t.openAccess = true
 			t.allowedUsers = make(map[string]bool)
+			feedback = "🔓 Thread opened for everyone."
 		} else {
 			// /open <@U1> <@U2> — allow specific users
 			t.openAccess = false
+			var added []string
 			for _, mention := range parts[1:] {
 				if uid := parseMention(mention); uid != "" {
 					t.allowedUsers[uid] = true
 					delete(t.bannedUsers, uid) // unban if banned
+					added = append(added, mention)
 				}
 			}
+			feedback = fmt.Sprintf("🔓 Access granted to %s.", strings.Join(added, " "))
 		}
 	case "/lock", "/close":
 		if len(parts) == 1 {
@@ -746,21 +752,25 @@ func (t *Thread) handleCommand(userID, cmd string) bool {
 			t.openAccess = false
 			t.allowedUsers = make(map[string]bool)
 			t.bannedUsers = make(map[string]bool)
+			feedback = "🔒 Thread locked to owner only."
 		} else {
 			// /lock <@U1> — ban specific users
+			var banned []string
 			for _, mention := range parts[1:] {
 				if uid := parseMention(mention); uid != "" {
 					t.bannedUsers[uid] = true
 					delete(t.allowedUsers, uid) // remove from allowed
+					banned = append(banned, mention)
 				}
 			}
+			feedback = fmt.Sprintf("🔒 Banned %s.", strings.Join(banned, " "))
 		}
 	}
 	t.mu.Unlock()
 
 	// Update thread parent to reflect new access state
 	t.updateTitle()
-	return true
+	return true, feedback
 }
 
 // parseMention extracts a user ID from a Slack mention ("<@U123>").

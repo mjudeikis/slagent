@@ -110,14 +110,19 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 				continue
 			}
 
-			// Handle slaude commands (/open, /close)
-			if t.handleCommand(msg.User, rest) {
+			// Handle slaude commands (/open, /lock, /close)
+			handled, feedback := t.handleCommand(msg.User, rest)
+			if feedback != "" {
+				t.Post(feedback)
+			}
+			if handled {
 				t.advanceLastTS(msg.Timestamp)
 				continue
 			}
 
 			// Unknown command — forward to Claude
 			if !t.isAuthorized(msg.User) {
+				t.Post("🚫 Not authorized.")
 				t.advanceLastTS(msg.Timestamp)
 				continue
 			}
@@ -133,6 +138,7 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 
 		// Check authorization
 		if !t.isAuthorized(msg.User) {
+			t.Post("🚫 Not authorized. Ask the thread owner to `/open`.")
 			t.advanceLastTS(msg.Timestamp)
 			continue
 		}

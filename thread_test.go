@@ -64,7 +64,7 @@ func TestThreadPermissions(t *testing.T) {
 	}
 
 	// /open command from owner
-	if !thread.handleCommand("U_OWNER", "/open") {
+	if handled, _ := thread.handleCommand("U_OWNER", "/open"); !handled {
 		t.Error("/open from owner should be handled")
 	}
 	if !thread.isAuthorized("U_OTHER") {
@@ -72,16 +72,18 @@ func TestThreadPermissions(t *testing.T) {
 	}
 
 	// /close from owner
-	if !thread.handleCommand("U_OWNER", "/close") {
+	if handled, _ := thread.handleCommand("U_OWNER", "/close"); !handled {
 		t.Error("/close from owner should be handled")
 	}
 	if thread.isAuthorized("U_OTHER") {
 		t.Error("other user should not be authorized after /close")
 	}
 
-	// /open from non-owner is ignored
-	if thread.handleCommand("U_OTHER", "/open") {
-		t.Error("/open from non-owner should not be handled")
+	// /open from non-owner returns handled=true but with denial feedback
+	if handled, feedback := thread.handleCommand("U_OTHER", "/open"); !handled {
+		t.Error("/open from non-owner should be handled (with denial)")
+	} else if feedback == "" {
+		t.Error("/open from non-owner should return feedback")
 	}
 }
 
@@ -440,10 +442,10 @@ func TestHandleCommandUnknownCommand(t *testing.T) {
 	defer mock.close()
 
 	thread := NewThread(mock.client(), "xoxc-test", "C_TEST", WithOwner("U_OWNER"))
-	if thread.handleCommand("U_OWNER", "/unknown") {
+	if handled, _ := thread.handleCommand("U_OWNER", "/unknown"); handled {
 		t.Error("/unknown should not be handled")
 	}
-	if thread.handleCommand("U_OWNER", "/help") {
+	if handled, _ := thread.handleCommand("U_OWNER", "/help"); handled {
 		t.Error("/help should not be handled")
 	}
 }
@@ -454,17 +456,108 @@ func TestHandleCommandNonOwnerBlocked(t *testing.T) {
 
 	thread := NewThread(mock.client(), "xoxc-test", "C_TEST", WithOwner("U_OWNER"))
 
-	if thread.handleCommand("U_OTHER", "/open") {
-		t.Error("non-owner /open should be rejected")
+	// Non-owner commands are handled (recognized) but denied with feedback
+	for _, cmd := range []string{"/open", "/lock", "/open <@U_ALICE>", "/lock <@U_ALICE>"} {
+		handled, feedback := thread.handleCommand("U_OTHER", cmd)
+		if !handled {
+			t.Errorf("non-owner %q should be handled (recognized)", cmd)
+		}
+		if !strings.Contains(feedback, "owner") {
+			t.Errorf("non-owner %q feedback should mention owner, got %q", cmd, feedback)
+		}
 	}
-	if thread.handleCommand("U_OTHER", "/lock") {
-		t.Error("non-owner /lock should be rejected")
+}
+
+func TestCommandFeedback(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	tests := []struct {
+		cmd          string
+		wantContains string
+	}{
+		{"/open", "🔓"},
+		{"/lock", "🔒"},
+		{"/open <@U_ALICE>", "🔓"},
+		{"/lock <@U_ALICE>", "🔒"},
+		{"/close", "🔒"},
 	}
-	if thread.handleCommand("U_OTHER", "/open <@U_ALICE>") {
-		t.Error("non-owner /open @user should be rejected")
+	for _, tt := range tests {
+		_, feedback := thread.handleCommand("U_OWNER", tt.cmd)
+		if !strings.Contains(feedback, tt.wantContains) {
+			t.Errorf("handleCommand(%q) feedback = %q, want containing %q", tt.cmd, feedback, tt.wantContains)
+		}
 	}
-	if thread.handleCommand("U_OTHER", "/lock <@U_ALICE>") {
-		t.Error("non-owner /lock @user should be rejected")
+}
+
+func TestCommandFeedbackPostedToSlack(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Inject a /open command from the owner
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OWNER", ":fox_face:: /open")
+	replies, err := thread.PollReplies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replies) != 0 {
+		t.Errorf("handled command should not produce replies, got %d", len(replies))
+	}
+
+	// Check that feedback was posted
+	msgs := mock.activeMessages()
+	var found bool
+	for _, m := range msgs {
+		if strings.Contains(m.Text, "🔓") && m.ThreadTS == thread.ThreadTS() {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("feedback message should be posted to thread")
+	}
+}
+
+func TestUnauthorizedMessageFeedback(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "xoxc-test", "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Inject a message from unauthorized user
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OTHER", "hello")
+	replies, _ := thread.PollReplies()
+	if len(replies) != 0 {
+		t.Error("unauthorized message should not produce replies")
+	}
+
+	// Check feedback was posted
+	msgs := mock.activeMessages()
+	var found bool
+	for _, m := range msgs {
+		if strings.Contains(m.Text, "Not authorized") && m.ThreadTS == thread.ThreadTS() {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("unauthorized feedback should be posted")
 	}
 }
 
