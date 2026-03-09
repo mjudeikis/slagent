@@ -484,24 +484,13 @@ func newChannelClient(workspace string) (*channel.Client, error) {
 // interactiveAuth runs credential extraction with user-facing output.
 func interactiveAuth() error {
 	fmt.Println("No Slack credentials found. Let's set them up.")
-	fmt.Println()
-	if err := runAuthExtract(); err != nil {
-		return err
-	}
-	fmt.Println()
-	return nil
+	return runAuthExtract()
 }
 
 // interactiveReauth re-extracts credentials after a token failure.
 func interactiveReauth() error {
-	fmt.Println()
 	fmt.Println("🔄 Token expired or invalid. Re-extracting from Slack desktop app...")
-	fmt.Println()
-	if err := runAuthExtract(); err != nil {
-		return err
-	}
-	fmt.Println()
-	return nil
+	return runAuthExtract()
 }
 
 // promptChannel lists channels and lets the user pick one, or type @username for a DM.
@@ -652,7 +641,6 @@ func runAuthManual() error {
 func runAuthExtract() error {
 	fmt.Println("🔍 Extracting Slack credentials from desktop app...")
 	fmt.Println("🔐 (you may see a macOS keychain access prompt — please allow access)")
-	fmt.Println()
 
 	result, err := credential.Extract()
 	if err != nil {
@@ -700,7 +688,7 @@ func runAuthExtract() error {
 	if err := credential.Save(key, creds); err != nil {
 		return fmt.Errorf("saving credentials: %w", err)
 	}
-	fmt.Printf("\n✅ %s added\n", key)
+	fmt.Printf("✅ %s added\n", key)
 
 	// Set as default if there isn't one yet, otherwise ask
 	_, defaultName, _ := credential.ListWorkspaces()
