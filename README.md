@@ -171,11 +171,11 @@ Reads the `xoxc-` session token and `xoxd-` cookie from Slack's local storage. O
 
 ### Bot token (xoxb-)
 
-Create a Slack app at https://api.slack.com/apps with scopes: `chat:write`, `channels:history`, `groups:history`, `channels:read`, `groups:read`, `users:read`.
+Create a Slack app at https://api.slack.com/apps with scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, `im:write`, `mpim:read`, `mpim:write`, `reactions:read`, `reactions:write`, `users:read`.
 
 ### User token (xoxp-)
 
-Same app setup as bot tokens, using User Token Scopes.
+Same app setup as bot tokens, using User Token Scopes instead of Bot Token Scopes.
 
 ## Platform Support
 
