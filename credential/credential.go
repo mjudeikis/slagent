@@ -12,9 +12,10 @@ import (
 
 // Credentials holds the stored Slack token for one workspace.
 type Credentials struct {
-	Token  string `json:"token,omitempty"`
-	Type   string `json:"type,omitempty"`   // "bot", "user", or "session"
-	Cookie string `json:"cookie,omitempty"` // xoxd-... for xoxc session tokens
+	Token      string `json:"token,omitempty"`
+	Type       string `json:"type,omitempty"`       // "bot", "user", or "session"
+	Cookie     string `json:"cookie,omitempty"`      // xoxd-... for xoxc session tokens
+	Enterprise bool   `json:"enterprise,omitempty"`  // true for enterprise grid workspaces
 }
 
 // EffectiveToken returns the token.

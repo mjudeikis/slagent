@@ -464,6 +464,7 @@ func newChannelClient(workspace string) (*channel.Client, error) {
 		return nil, err
 	}
 	sc := slackclient.New(creds.EffectiveToken(), creds.Cookie)
+	sc.SetEnterprise(creds.Enterprise)
 	ch, err := channel.New(sc)
 	if credential.IsAuthError(err) {
 		if rerr := interactiveReauth(); rerr != nil {
@@ -474,6 +475,7 @@ func newChannelClient(workspace string) (*channel.Client, error) {
 			return nil, err
 		}
 		sc = slackclient.New(creds.EffectiveToken(), creds.Cookie)
+		sc.SetEnterprise(creds.Enterprise)
 		ch, err = channel.New(sc)
 	}
 	return ch, err
@@ -528,7 +530,7 @@ func promptChannel(workspace string) (string, string, error) {
 	if err != nil || len(channels) == 0 {
 		// Can't list channels (enterprise restriction, etc.) — prompt manually
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️  Could not list channels: %v\n", err)
+			fmt.Fprintf(os.Stderr, "⚠️ Could not list channels: %v\n", err)
 		}
 		fmt.Print("📡 Channel ID or URL (or @username for DM): ")
 	} else {
@@ -688,6 +690,13 @@ func runAuthExtract() error {
 		Type:   "session",
 		Cookie: result.Cookie,
 	}
+
+	// Detect enterprise grid before saving
+	sc := slackclient.New(creds.EffectiveToken(), creds.Cookie)
+	if resp, err := sc.AuthTest(); err == nil && resp.EnterpriseID != "" {
+		creds.Enterprise = true
+	}
+
 	if err := credential.Save(key, creds); err != nil {
 		return fmt.Errorf("saving credentials: %w", err)
 	}

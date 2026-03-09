@@ -11,8 +11,9 @@ import (
 // Client wraps *slack.Client with token metadata for raw API calls.
 type Client struct {
 	*slackapi.Client
-	token  string
-	cookie string
+	token      string
+	cookie     string
+	enterprise bool
 }
 
 // Token returns the raw Slack token.
@@ -20,6 +21,39 @@ func (c *Client) Token() string { return c.token }
 
 // Cookie returns the session cookie (empty for bot/user tokens).
 func (c *Client) Cookie() string { return c.cookie }
+
+// Enterprise returns true for enterprise grid workspaces.
+func (c *Client) Enterprise() bool { return c.enterprise }
+
+// SetEnterprise marks this client as enterprise grid.
+func (c *Client) SetEnterprise(v bool) { c.enterprise = v }
+
+// ErrEnterprise is returned when a Slack API method is restricted on enterprise grid.
+var ErrEnterprise = fmt.Errorf("enterprise grid workspace restricts this API (token would be invalidated)")
+
+// GetConversationInfo overrides the embedded method to block on enterprise grid.
+func (c *Client) GetConversationInfo(input *slackapi.GetConversationInfoInput) (*slackapi.Channel, error) {
+	if c.enterprise {
+		return nil, ErrEnterprise
+	}
+	return c.Client.GetConversationInfo(input)
+}
+
+// GetConversationsForUser overrides the embedded method to block on enterprise grid.
+func (c *Client) GetConversationsForUser(params *slackapi.GetConversationsForUserParameters) ([]slackapi.Channel, string, error) {
+	if c.enterprise {
+		return nil, "", ErrEnterprise
+	}
+	return c.Client.GetConversationsForUser(params)
+}
+
+// GetConversationHistory overrides the embedded method to block on enterprise grid.
+func (c *Client) GetConversationHistory(params *slackapi.GetConversationHistoryParameters) (*slackapi.GetConversationHistoryResponse, error) {
+	if c.enterprise {
+		return nil, ErrEnterprise
+	}
+	return c.Client.GetConversationHistory(params)
+}
 
 // HTTPDo executes a raw HTTP request with authentication headers set.
 func (c *Client) HTTPDo(req *http.Request) (*http.Response, error) {

@@ -120,6 +120,7 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 			return nil, fmt.Errorf("slack credentials: %w", err)
 		}
 		client := slackclient.New(creds.EffectiveToken(), creds.Cookie)
+		client.SetEnterprise(creds.Enterprise)
 
 		// Resolve channel display name if not already set
 		if cfg.ChannelName == "" {

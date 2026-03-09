@@ -42,7 +42,14 @@ func New(c *slackclient.Client) (*Client, error) {
 			return nil, fmt.Errorf("auth.test: %w", err)
 		}
 		ch.ownUserID = resp.UserID
-		ch.enterpriseID = resp.EnterpriseID
+		if resp.EnterpriseID != "" {
+			ch.enterpriseID = resp.EnterpriseID
+		}
+	}
+
+	// Trust the client flag (set from stored credentials) even for bot tokens
+	if c.Enterprise() && ch.enterpriseID == "" {
+		ch.enterpriseID = "enterprise"
 	}
 	return ch, nil
 }
