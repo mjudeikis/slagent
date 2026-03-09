@@ -302,9 +302,9 @@ specific instance using the `:shortcode::` prefix (renders as `🦊:` in Slack).
 ### Format
 
 ```
-:fox_face:: do this task         →  targeted at the fox instance
-:dog:: /compact                  →  /compact command to the dog instance
-<@U123> :fox_face:: hello        →  @mention + targeted message
+:fox_face:: do this task         →  addressed to fox (all see it, others ignore via prompt)
+:dog:: /compact                  →  /compact sent exclusively to dog instance
+<@U123> :fox_face:: hello        →  @mention + addressed to fox
 regular message                  →  broadcast to all instances
 ```
 

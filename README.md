@@ -70,15 +70,15 @@ Everything after `--` is passed through to the Claude subprocess. This means sla
 
 ### Multi-Instance Threads
 
-Multiple slaude instances can share a Slack thread. Each instance gets a unique identity emoji (e.g. 🦊, 🐶). To target a specific instance, use `:shortcode::` prefix:
+Multiple slaude instances can share a Slack thread. Each instance gets a unique identity emoji (e.g. 🦊, 🐶). To address a specific instance, use `:shortcode::` prefix:
 
 ```
-:fox_face:: focus on the auth module     →  only the 🦊 instance sees this
-:dog:: run the tests                     →  only the 🐶 instance sees this
-Messages without prefix                  →  delivered to all instances
+:fox_face:: focus on the auth module     →  addressed to 🦊 (others see it but ignore)
+:fox_face:: /compact                     →  /command sent exclusively to 🦊
+Messages without prefix                  →  broadcast to all instances
 ```
 
-Commands can also be targeted: `:fox_face:: /open` sends `/open` to the fox instance only.
+Regular messages with `:shortcode::` are delivered to all instances, but the system prompt tells non-targeted instances to ignore them. Commands (`/something`) are instance-exclusive — only the targeted instance receives them.
 
 ## slagent Library
 
