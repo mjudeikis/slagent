@@ -32,32 +32,38 @@ var cli struct {
 
 // StartCmd starts a new interactive session with Claude Code.
 type StartCmd struct {
-	Channel    string   `short:"c" help:"Slack channel name or ID." placeholder:"CHANNEL"`
-	User       []string `short:"u" help:"Slack user(s) for DM. Use multiple -u for group DM." placeholder:"USER"`
-	Open       bool     `help:"Start with thread open for all participants (default: locked to owner)."`
-	Topic      []string `arg:"" optional:"" help:"Planning topic."`
-	Debug      bool     `help:"Print raw JSON events from Claude to terminal."`
-	NoBye      bool     `help:"Don't post a goodbye message to Slack on exit."`
-	ClaudeArgs []string `name:"-" hidden:""`
+	Channel                    string   `short:"c" help:"Slack channel name or ID." placeholder:"CHANNEL"`
+	User                       []string `short:"u" help:"Slack user(s) for DM. Use multiple -u for group DM." placeholder:"USER"`
+	Open                       bool     `help:"Start with thread open for all participants (default: locked to owner)."`
+	Topic                      []string `arg:"" optional:"" help:"Planning topic."`
+	Debug                      bool     `help:"Print raw JSON events from Claude to terminal."`
+	NoBye                      bool     `help:"Don't post a goodbye message to Slack on exit."`
+	DangerousAutoApprove        string   `help:"Auto-approve sandbox risk level: never|green|yellow (default: never)." default:"never" enum:"never,green,yellow"`
+	DangerousAutoApproveNetwork string   `help:"Auto-approve network access: never|known|any (default: never)." default:"never" enum:"never,known,any"`
+	ClaudeArgs                 []string `name:"-" hidden:""`
 }
 
 // JoinCmd joins an existing Slack thread with a new slaude instance.
 type JoinCmd struct {
-	URL        string   `arg:"" help:"Slack thread URL to join."`
-	Topic      []string `arg:"" optional:"" help:"Planning topic."`
-	Closed     bool     `help:"Start locked to owner only, ignoring thread access state."`
-	Debug      bool     `help:"Print raw JSON events from Claude to terminal."`
-	NoBye      bool     `help:"Don't post a goodbye message to Slack on exit."`
-	ClaudeArgs []string `name:"-" hidden:""`
+	URL                        string   `arg:"" help:"Slack thread URL to join."`
+	Topic                      []string `arg:"" optional:"" help:"Planning topic."`
+	Closed                     bool     `help:"Start locked to owner only, ignoring thread access state."`
+	Debug                      bool     `help:"Print raw JSON events from Claude to terminal."`
+	NoBye                      bool     `help:"Don't post a goodbye message to Slack on exit."`
+	DangerousAutoApprove        string   `help:"Auto-approve sandbox risk level: never|green|yellow (default: never)." default:"never" enum:"never,green,yellow"`
+	DangerousAutoApproveNetwork string   `help:"Auto-approve network access: never|known|any (default: never)." default:"never" enum:"never,known,any"`
+	ClaudeArgs                 []string `name:"-" hidden:""`
 }
 
 // ResumeCmd resumes an existing session in a Slack thread.
 type ResumeCmd struct {
-	URL        string   `arg:"" help:"Slack thread URL with #instanceID fragment."`
-	Closed     bool     `help:"Start locked to owner only, ignoring thread access state."`
-	Debug      bool     `help:"Print raw JSON events from Claude to terminal."`
-	NoBye      bool     `help:"Don't post a goodbye message to Slack on exit."`
-	ClaudeArgs []string `name:"-" hidden:""`
+	URL                        string   `arg:"" help:"Slack thread URL with #instanceID fragment."`
+	Closed                     bool     `help:"Start locked to owner only, ignoring thread access state."`
+	Debug                      bool     `help:"Print raw JSON events from Claude to terminal."`
+	NoBye                      bool     `help:"Don't post a goodbye message to Slack on exit."`
+	DangerousAutoApprove        string   `help:"Auto-approve sandbox risk level: never|green|yellow (default: never)." default:"never" enum:"never,green,yellow"`
+	DangerousAutoApproveNetwork string   `help:"Auto-approve network access: never|known|any (default: never)." default:"never" enum:"never,known,any"`
+	ClaudeArgs                 []string `name:"-" hidden:""`
 }
 
 // parseThreadURL parses a Slack permalink URL into channel, thread timestamp,
@@ -106,13 +112,15 @@ func parseThreadURL(value string) (ch, threadTS, instanceID, afterTS string) {
 
 func (cmd *StartCmd) Run() error {
 	cfg := session.Config{
-		Topic:      strings.Join(cmd.Topic, " "),
-		Channel:    cmd.Channel,
-		OpenAccess: cmd.Open,
-		Debug:      cmd.Debug,
-		NoBye:      cmd.NoBye,
-		Workspace:  cli.Workspace,
-		ClaudeArgs: cmd.ClaudeArgs,
+		Topic:                      strings.Join(cmd.Topic, " "),
+		Channel:                    cmd.Channel,
+		OpenAccess:                 cmd.Open,
+		Debug:                      cmd.Debug,
+		NoBye:                      cmd.NoBye,
+		Workspace:                  cli.Workspace,
+		ClaudeArgs:                 cmd.ClaudeArgs,
+		DangerousAutoApprove:        cmd.DangerousAutoApprove,
+		DangerousAutoApproveNetwork: cmd.DangerousAutoApproveNetwork,
 	}
 
 	// Ensure credentials exist before any Slack API call
@@ -188,14 +196,16 @@ func (cmd *JoinCmd) Run() error {
 	}
 
 	cfg := session.Config{
-		Topic:          strings.Join(cmd.Topic, " "),
-		Channel:        ch,
-		ResumeThreadTS: threadTS,
-		ClosedAccess:   cmd.Closed,
-		Debug:          cmd.Debug,
-		NoBye:          cmd.NoBye,
-		Workspace:      cli.Workspace,
-		ClaudeArgs:     cmd.ClaudeArgs,
+		Topic:                      strings.Join(cmd.Topic, " "),
+		Channel:                    ch,
+		ResumeThreadTS:             threadTS,
+		ClosedAccess:               cmd.Closed,
+		Debug:                      cmd.Debug,
+		NoBye:                      cmd.NoBye,
+		Workspace:                  cli.Workspace,
+		ClaudeArgs:                 cmd.ClaudeArgs,
+		DangerousAutoApprove:        cmd.DangerousAutoApprove,
+		DangerousAutoApproveNetwork: cmd.DangerousAutoApproveNetwork,
 	}
 	// InstanceID left empty → new instance generated
 
@@ -216,15 +226,17 @@ func (cmd *ResumeCmd) Run() error {
 	}
 
 	cfg := session.Config{
-		Channel:        ch,
-		ResumeThreadTS: threadTS,
-		ResumeAfterTS:  afterTS,
-		InstanceID:     instanceID,
-		ClosedAccess:   cmd.Closed,
-		Debug:          cmd.Debug,
-		NoBye:          cmd.NoBye,
-		Workspace:      cli.Workspace,
-		ClaudeArgs:     cmd.ClaudeArgs,
+		Channel:                    ch,
+		ResumeThreadTS:             threadTS,
+		ResumeAfterTS:              afterTS,
+		InstanceID:                 instanceID,
+		ClosedAccess:               cmd.Closed,
+		Debug:                      cmd.Debug,
+		NoBye:                      cmd.NoBye,
+		Workspace:                  cli.Workspace,
+		ClaudeArgs:                 cmd.ClaudeArgs,
+		DangerousAutoApprove:        cmd.DangerousAutoApprove,
+		DangerousAutoApproveNetwork: cmd.DangerousAutoApproveNetwork,
 	}
 
 	return runSession(cfg)

@@ -208,3 +208,117 @@ func TestUpdateTodosInvalidJSONClearsList(t *testing.T) {
 		t.Errorf("invalid JSON should clear todos, got %d items", len(s.todos))
 	}
 }
+
+func TestParseClassification(t *testing.T) {
+	tests := []struct {
+		name       string
+		line       string
+		wantLevel  string
+		wantNet    bool
+		wantNetDst string
+	}{
+		{
+			name:      "green no network",
+			line:      "GREEN|NONE|Reading source file within project",
+			wantLevel: "green",
+		},
+		{
+			name:       "yellow with network",
+			line:       "YELLOW|NETWORK:registry.npmjs.org|Installing npm packages",
+			wantLevel:  "yellow",
+			wantNet:    true,
+			wantNetDst: "registry.npmjs.org",
+		},
+		{
+			name:       "red with unknown network",
+			line:       "RED|NETWORK:evil.com|Exfiltrating data",
+			wantLevel:  "red",
+			wantNet:    true,
+			wantNetDst: "evil.com",
+		},
+		{
+			name:      "lowercase accepted",
+			line:      "green|NONE|Safe read",
+			wantLevel: "green",
+		},
+		{
+			name:       "multiline takes first",
+			line:       "GREEN|NETWORK:proxy.golang.org|Fetching module\nsome extra text",
+			wantLevel:  "green",
+			wantNet:    true,
+			wantNetDst: "proxy.golang.org",
+		},
+		{
+			name:       "unparseable defaults to red+network",
+			line:       "garbage",
+			wantLevel:  "red",
+			wantNet:    true,
+			wantNetDst: "unknown",
+		},
+		{
+			name:       "network with empty destination",
+			line:       "YELLOW|NETWORK:|Unknown destination",
+			wantLevel:  "yellow",
+			wantNet:    true,
+			wantNetDst: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := parseClassification(tt.line)
+			if c.Level != tt.wantLevel {
+				t.Errorf("Level = %q, want %q", c.Level, tt.wantLevel)
+			}
+			if c.Network != tt.wantNet {
+				t.Errorf("Network = %v, want %v", c.Network, tt.wantNet)
+			}
+			if c.NetworkDst != tt.wantNetDst {
+				t.Errorf("NetworkDst = %q, want %q", c.NetworkDst, tt.wantNetDst)
+			}
+		})
+	}
+}
+
+func TestLevelAllowed(t *testing.T) {
+	tests := []struct {
+		level     string
+		threshold string
+		want      bool
+	}{
+		{"green", "never", false},
+		{"yellow", "never", false},
+		{"red", "never", false},
+		{"green", "green", true},
+		{"yellow", "green", false},
+		{"red", "green", false},
+		{"green", "yellow", true},
+		{"yellow", "yellow", true},
+		{"red", "yellow", false},
+	}
+
+	for _, tt := range tests {
+		name := tt.level + "/" + tt.threshold
+		t.Run(name, func(t *testing.T) {
+			got := levelAllowed(tt.level, tt.threshold)
+			if got != tt.want {
+				t.Errorf("levelAllowed(%q, %q) = %v, want %v", tt.level, tt.threshold, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLevelEmoji(t *testing.T) {
+	if e := levelEmoji("green"); e != "🟢" {
+		t.Errorf("green = %q", e)
+	}
+	if e := levelEmoji("yellow"); e != "🟡" {
+		t.Errorf("yellow = %q", e)
+	}
+	if e := levelEmoji("red"); e != "🔴" {
+		t.Errorf("red = %q", e)
+	}
+	if e := levelEmoji("unknown"); e != "🔴" {
+		t.Errorf("unknown = %q", e)
+	}
+}

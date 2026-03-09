@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,10 @@ type Config struct {
 	NoBye          bool     // don't post goodbye message on exit
 	Workspace      string   // Slack workspace (empty = default)
 	ClaudeArgs     []string // pass-through args for Claude subprocess
+
+	// AI-based permission auto-approve settings
+	DangerousAutoApprove        string // "never", "green", "yellow"
+	DangerousAutoApproveNetwork string // "never", "known", "any"
 }
 
 // ResumeInfo is returned by Run so the caller can print a resume command.
@@ -52,6 +57,7 @@ type ResumeInfo struct {
 // Session is a running slaude session.
 type Session struct {
 	cfg      Config
+	ctx      context.Context    // session lifetime context
 	ui       *terminal.UI
 	proc     *claude.Process
 	thread   *slagent.Thread
@@ -68,6 +74,9 @@ type Session struct {
 	// Task tracking: TodoWrite state mirrored to Slack
 	todos   []todo
 	todosTS string // Slack message timestamp for the tasks message
+
+	// Known-safe network destinations (for auto-approve with "known" level)
+	knownHosts map[string]bool
 }
 
 // todo is a single item from Claude's TodoWrite tool.
@@ -97,10 +106,20 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 
 	sess := &Session{
 		cfg:         cfg,
+		ctx:         ctx,
 		ui:          ui,
 		cancel:      cancel,
 		replyNotify: make(chan struct{}, 1),
 		stopNotify:  make(chan struct{}, 1),
+		knownHosts: map[string]bool{
+			"proxy.golang.org":  true,
+			"sum.golang.org":    true,
+			"registry.npmjs.org": true,
+			"github.com":        true,
+			"pypi.org":          true,
+			"rubygems.org":      true,
+			"crates.io":         true,
+		},
 	}
 
 	// Open debug log
@@ -635,11 +654,137 @@ func (s *Session) readTurn(earlyTurn ...slagent.Turn) error {
 	}
 }
 
+// classification holds the AI-assessed risk of a permission request.
+type classification struct {
+	Level      string // "green", "yellow", "red"
+	Network    bool   // involves network access
+	NetworkDst string // destination if network (e.g. "proxy.golang.org", "unknown")
+	Reasoning  string // one-sentence explanation
+}
+
+// classificationTimeout is how long to wait for the AI classifier.
+const classificationTimeout = 30 * time.Second
+
+// classifyPermission shells out to `claude -p -m haiku` to assess the risk of a tool call.
+func classifyPermission(ctx context.Context, toolName string, input json.RawMessage) (*classification, error) {
+	cwd, _ := os.Getwd()
+	prompt := fmt.Sprintf(`You are a security classifier for Claude Code tool permission requests.
+
+Classify this tool call by sandbox escape risk and network access.
+
+Tool: %s
+Input: %s
+Working directory: %s
+
+Risk levels:
+- GREEN: read-only local operations, safe file reads, searches, listing
+- YELLOW: local writes to project files, running tests, installing deps from known sources
+- RED: arbitrary code execution with untrusted input, modifying system files, exfiltrating data, credential access, destructive ops
+
+Network: does this operation access the network? If yes, what destination?
+
+Respond with EXACTLY one line in this format:
+LEVEL|NETWORK_STATUS|reasoning
+
+Where:
+- LEVEL is GREEN, YELLOW, or RED
+- NETWORK_STATUS is either "NONE" or "NETWORK:destination" (e.g. "NETWORK:proxy.golang.org" or "NETWORK:unknown")
+- reasoning is a short one-sentence explanation
+
+Examples:
+GREEN|NONE|Reading source file within project
+YELLOW|NONE|Writing test file in project directory
+GREEN|NETWORK:proxy.golang.org|Fetching Go module from official proxy
+RED|NETWORK:evil.com|Downloading and executing remote script from unknown host
+YELLOW|NETWORK:registry.npmjs.org|Installing npm packages from official registry`, toolName, string(input), cwd)
+
+	ctx, cancel := context.WithTimeout(ctx, classificationTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "text", "--model", "haiku", prompt)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg != "" {
+			err = fmt.Errorf("%w: %s", err, errMsg)
+		}
+		return &classification{Level: "red", Network: true, NetworkDst: "unknown", Reasoning: "classification failed"}, err
+	}
+
+	return parseClassification(strings.TrimSpace(string(out))), nil
+}
+
+// parseClassification parses a "LEVEL|NETWORK_STATUS|reasoning" line.
+func parseClassification(line string) *classification {
+	// Take only the first line if multiple lines returned
+	if idx := strings.IndexByte(line, '\n'); idx >= 0 {
+		line = line[:idx]
+	}
+
+	parts := strings.SplitN(line, "|", 3)
+	if len(parts) < 3 {
+		return &classification{Level: "red", Network: true, NetworkDst: "unknown", Reasoning: "unparseable response"}
+	}
+
+	c := &classification{
+		Reasoning: strings.TrimSpace(parts[2]),
+	}
+
+	// Parse level
+	switch strings.TrimSpace(strings.ToUpper(parts[0])) {
+	case "GREEN":
+		c.Level = "green"
+	case "YELLOW":
+		c.Level = "yellow"
+	default:
+		c.Level = "red"
+	}
+
+	// Parse network status
+	netPart := strings.TrimSpace(parts[1])
+	if strings.HasPrefix(strings.ToUpper(netPart), "NETWORK:") {
+		c.Network = true
+		c.NetworkDst = strings.TrimSpace(netPart[len("NETWORK:"):])
+		if c.NetworkDst == "" {
+			c.NetworkDst = "unknown"
+		}
+	}
+
+	return c
+}
+
+// levelEmoji returns the colored circle emoji for a classification level.
+func levelEmoji(level string) string {
+	switch level {
+	case "green":
+		return "🟢"
+	case "yellow":
+		return "🟡"
+	default:
+		return "🔴"
+	}
+}
+
+// levelAllowed returns true if the classification level is within the auto-approve threshold.
+func levelAllowed(level, threshold string) bool {
+	switch threshold {
+	case "green":
+		return level == "green"
+	case "yellow":
+		return level == "green" || level == "yellow"
+	default:
+		return false
+	}
+}
+
 // permissionTimeout is how long to wait for the owner to approve/deny a tool.
 const permissionTimeout = 5 * time.Minute
 
-// handlePermission processes a permission request from the MCP server by posting
-// to Slack and polling for owner approval via reactions.
+// handlePermission processes a permission request from the MCP server.
+// It classifies the request via AI, auto-approves if within configured thresholds,
+// and escalates to Slack otherwise.
 func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.PermissionResponse {
 	if s.debugLog != nil {
 		raw, _ := json.Marshal(req)
@@ -648,16 +793,83 @@ func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.Permissi
 	}
 
 	detail := toolDetail(req.ToolName, string(req.Input))
-	prompt := fmt.Sprintf("🔐 *Permission request*: %s", req.ToolName)
+
+	// Classify the permission request via AI
+	cls, clsErr := classifyPermission(s.ctx, req.ToolName, req.Input)
+	if clsErr != nil {
+		s.ui.Error(fmt.Sprintf("classification error: %v", clsErr))
+		if s.debugLog != nil {
+			fmt.Fprintf(s.debugLog, "classification_error: %v\n", clsErr)
+		}
+	}
+
+	// Build terminal display
+	emoji := levelEmoji(cls.Level)
+	var netTag string
+	if cls.Network {
+		netTag = "🌐"
+	}
+	s.ui.ToolActivity(fmt.Sprintf("  %s%s %s: %s — %s", emoji, netTag, req.ToolName, detail, cls.Reasoning))
+
+	// Check if auto-approvable
+	autoApproveLevel := s.cfg.DangerousAutoApprove
+	autoApproveNet := s.cfg.DangerousAutoApproveNetwork
+	if autoApproveLevel == "" {
+		autoApproveLevel = "never"
+	}
+	if autoApproveNet == "" {
+		autoApproveNet = "never"
+	}
+
+	sandboxOK := levelAllowed(cls.Level, autoApproveLevel)
+	networkOK := true
+	if cls.Network {
+		switch autoApproveNet {
+		case "any":
+			networkOK = true
+		case "known":
+			networkOK = s.knownHosts[cls.NetworkDst]
+		default:
+			networkOK = false
+		}
+	}
+
+	if sandboxOK && networkOK {
+		// Auto-approve
+		var reason string
+		if cls.Network {
+			knownTag := "unknown"
+			if s.knownHosts[cls.NetworkDst] {
+				knownTag = "known"
+			}
+			reason = fmt.Sprintf("%s+%s", cls.Level, knownTag)
+		} else {
+			reason = cls.Level
+		}
+		s.ui.ToolActivity(fmt.Sprintf("  ✅ Auto-approved (%s)", reason))
+		return &perms.PermissionResponse{Behavior: "allow"}
+	}
+
+	// Escalate to Slack
+	prompt := fmt.Sprintf("%s%s *Permission request*: %s", emoji, netTag, req.ToolName)
 	if detail != "" {
 		prompt += ": " + detail
 	}
+	// Show criticality and reasoning
+	if cls.Network {
+		prompt += fmt.Sprintf("\n> %s risk, network: %s — %s", strings.ToUpper(cls.Level), cls.NetworkDst, cls.Reasoning)
+	} else {
+		prompt += fmt.Sprintf("\n> %s risk — %s", strings.ToUpper(cls.Level), cls.Reasoning)
+	}
 
-	// Show in terminal
-	s.ui.ToolActivity(fmt.Sprintf("🔐 Permission: %s: %s", req.ToolName, detail))
+	// Network requests get 3 reactions (✅ 💾 ❌), non-network get 2 (✅ ❌)
+	var reactions []string
+	if cls.Network {
+		reactions = []string{"white_check_mark", "floppy_disk", "x"}
+	} else {
+		reactions = []string{"white_check_mark", "x"}
+	}
 
-	// Post permission prompt with approve/deny reactions
-	reactions := []string{"white_check_mark", "x"}
 	msgTS, err := s.thread.PostPrompt(prompt, reactions)
 	if err != nil {
 		s.ui.ToolActivity("❌ Denied (failed to post to Slack)")
@@ -665,9 +877,16 @@ func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.Permissi
 	}
 
 	// Poll for owner reaction
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 	deadline := time.Now().Add(permissionTimeout)
 	for time.Now().Before(deadline) {
-		time.Sleep(2 * time.Second)
+		select {
+		case <-s.ctx.Done():
+			s.thread.DeleteMessage(msgTS)
+			return &perms.PermissionResponse{Behavior: "deny", Message: "session cancelled"}
+		case <-ticker.C:
+		}
 		selected, err := s.thread.PollReaction(msgTS, reactions)
 		if err != nil {
 			continue
@@ -675,18 +894,27 @@ func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.Permissi
 		switch selected {
 		case "white_check_mark":
 			s.thread.DeleteMessage(msgTS)
-			s.ui.ToolActivity(fmt.Sprintf("✅ Approved: %s: %s", req.ToolName, detail))
+			s.ui.ToolActivity(fmt.Sprintf("  ✅ Approved: %s: %s", req.ToolName, detail))
+			return &perms.PermissionResponse{Behavior: "allow"}
+		case "floppy_disk":
+			// Approve and remember host for this session
+			if cls.Network && cls.NetworkDst != "" && cls.NetworkDst != "unknown" {
+				s.knownHosts[cls.NetworkDst] = true
+				s.ui.Info(fmt.Sprintf("  💾 Remembered %s as known host", cls.NetworkDst))
+			}
+			s.thread.DeleteMessage(msgTS)
+			s.ui.ToolActivity(fmt.Sprintf("  ✅ Approved+saved: %s: %s", req.ToolName, detail))
 			return &perms.PermissionResponse{Behavior: "allow"}
 		case "x":
 			s.thread.DeleteMessage(msgTS)
-			s.ui.ToolActivity(fmt.Sprintf("❌ Denied: %s: %s", req.ToolName, detail))
+			s.ui.ToolActivity(fmt.Sprintf("  ❌ Denied: %s: %s", req.ToolName, detail))
 			return &perms.PermissionResponse{Behavior: "deny", Message: "denied by owner via Slack"}
 		}
 	}
 
 	// Timeout — auto-deny
 	s.thread.DeleteMessage(msgTS)
-	s.ui.ToolActivity(fmt.Sprintf("⏰ Timed out: %s: %s", req.ToolName, detail))
+	s.ui.ToolActivity(fmt.Sprintf("  ⏰ Timed out: %s: %s", req.ToolName, detail))
 	return &perms.PermissionResponse{Behavior: "deny", Message: "permission request timed out"}
 }
 
