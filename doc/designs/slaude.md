@@ -350,9 +350,9 @@ targeting (`:shortcode:: /open`). Access state is reflected in the thread title.
 
 The thread parent message reflects the access state:
 - `🔒🧵 Topic` — locked (owner only)
-- `🔓🧵 Topic` — open for all
-- `🔒🧵 Topic (🔓 for <@U1> <@U2>)` — open for specific users
-- `🔓🧵 Topic (🔒 for <@U3>)` — open but with banned users
+- `🧵 Topic` — open for all
+- `🧵 <@U1> <@U2> Topic` — open for specific users
+- `🧵 Topic (🔒 <@U3>)` — open but with banned users
 
 On `Resume()`, the title is parsed to recover the access state.
 

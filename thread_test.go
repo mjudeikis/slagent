@@ -240,28 +240,28 @@ func TestFormatTitle(t *testing.T) {
 		{
 			name:  "locked (default)",
 			setup: func(th *Thread) {},
-			want:  ":fox_face:🔒:thread: Test Topic",
+			want:  ":fox_face:🔒🧵 Test Topic",
 		},
 		{
 			name: "open for all",
 			setup: func(th *Thread) {
 				th.handleCommand("U_OWNER", "/open")
 			},
-			want: ":fox_face::thread: Test Topic",
+			want: ":fox_face:🧵 Test Topic",
 		},
 		{
 			name: "open for specific user",
 			setup: func(th *Thread) {
 				th.handleCommand("U_OWNER", "/open <@U_ALICE>")
 			},
-			want: ":fox_face:🔒:thread: Test Topic (🔓 <@U_ALICE>)",
+			want: ":fox_face:🧵 <@U_ALICE> Test Topic",
 		},
 		{
 			name: "open for multiple users",
 			setup: func(th *Thread) {
 				th.handleCommand("U_OWNER", "/open <@U_ALICE> <@U_BOB>")
 			},
-			want: ":fox_face:🔒:thread: Test Topic (🔓 <@U_ALICE> <@U_BOB>)",
+			want: ":fox_face:🧵 <@U_ALICE> <@U_BOB> Test Topic",
 		},
 		{
 			name: "banned user",
@@ -269,7 +269,7 @@ func TestFormatTitle(t *testing.T) {
 				th.handleCommand("U_OWNER", "/open")
 				th.handleCommand("U_OWNER", "/lock <@U_EVIL>")
 			},
-			want: ":fox_face::thread: Test Topic (🔒 <@U_EVIL>)",
+			want: ":fox_face:🧵 Test Topic (🔒 <@U_EVIL>)",
 		},
 		{
 			name: "allowed and banned",
@@ -277,7 +277,7 @@ func TestFormatTitle(t *testing.T) {
 				th.handleCommand("U_OWNER", "/open <@U_ALICE>")
 				th.handleCommand("U_OWNER", "/lock <@U_EVIL>")
 			},
-			want: ":fox_face:🔒:thread: Test Topic (🔓 <@U_ALICE>) (🔒 <@U_EVIL>)",
+			want: ":fox_face:🧵 <@U_ALICE> Test Topic (🔒 <@U_EVIL>)",
 		},
 	}
 	for _, tt := range tests {
@@ -310,33 +310,33 @@ func TestParseTitle(t *testing.T) {
 	}{
 		{
 			name:      "locked",
-			text:      ":fox_face:🔒:thread: My Topic",
+			text:      ":fox_face:🔒🧵 My Topic",
 			wantTitle: "My Topic",
 			wantOpen:  false,
 		},
 		{
 			name:      "open",
-			text:      ":fox_face::thread: My Topic",
+			text:      ":fox_face:🧵 My Topic",
 			wantTitle: "My Topic",
 			wantOpen:  true,
 		},
 		{
 			name:        "selective access",
-			text:        ":fox_face:🔒:thread: My Topic (🔓 <@U_ALICE> <@U_BOB>)",
+			text:        ":fox_face:🧵 <@U_ALICE> <@U_BOB> My Topic",
 			wantTitle:   "My Topic",
 			wantOpen:    false,
 			wantAllowed: []string{"U_ALICE", "U_BOB"},
 		},
 		{
 			name:       "banned users",
-			text:       ":fox_face::thread: My Topic (🔒 <@U_EVIL>)",
+			text:       ":fox_face:🧵 My Topic (🔒 <@U_EVIL>)",
 			wantTitle:  "My Topic",
 			wantOpen:   true,
 			wantBanned: []string{"U_EVIL"},
 		},
 		{
 			name:        "allowed and banned",
-			text:        ":fox_face:🔒:thread: My Topic (🔓 <@U_ALICE>) (🔒 <@U_EVIL>)",
+			text:        ":fox_face:🧵 <@U_ALICE> My Topic (🔒 <@U_EVIL>)",
 			wantTitle:   "My Topic",
 			wantOpen:    false,
 			wantAllowed: []string{"U_ALICE"},

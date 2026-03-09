@@ -486,9 +486,11 @@ func (t *Thread) resolveUser(userID string) string {
 }
 
 // formatTitle builds the thread parent label reflecting access state.
-// Format: ":instanceID:🔒:thread: Title" or ":instanceID:🔓:thread: Title"
-// With selective access: ":instanceID:🔒:thread: Title (🔓 for <@U1> <@U2>)"
-// With bans: ":instanceID:🔓:thread: Title (🔒 for <@U3>)"
+//
+//	Locked (owner only):       ":instanceID:🔒🧵 Topic"
+//	Open for all:              ":instanceID:🧵 Topic"
+//	Selective (allowed users): ":instanceID:🧵 <@U1> <@U2> Topic"
+//	With bans (appended):      "... (🔒 <@U3>)"
 func (t *Thread) formatTitle() string {
 	t.mu.Lock()
 	title := t.title
@@ -510,20 +512,19 @@ func (t *Thread) formatTitle() string {
 		title = "Agent session"
 	}
 
-	// 🔒 shown when locked, omitted when open
-	lock := ""
-	if !open {
-		lock = "🔒"
-	}
-	label := fmt.Sprintf(":%s:%s:thread: %s", t.instanceID, lock, title)
-
-	// Append selective access list when locked
-	if !open && len(allowed) > 0 {
+	// 🔒 only when locked to owner (no allowed users)
+	var label string
+	if !open && len(allowed) == 0 {
+		label = fmt.Sprintf(":%s:🔒🧵 %s", t.instanceID, title)
+	} else if !open && len(allowed) > 0 {
+		// Selective: mentions before topic text
 		var mentions []string
 		for _, u := range allowed {
 			mentions = append(mentions, fmt.Sprintf("<@%s>", u))
 		}
-		label += fmt.Sprintf(" (🔓 %s)", strings.Join(mentions, " "))
+		label = fmt.Sprintf(":%s:🧵 %s %s", t.instanceID, strings.Join(mentions, " "), title)
+	} else {
+		label = fmt.Sprintf(":%s:🧵 %s", t.instanceID, title)
 	}
 
 	// Append ban list
@@ -542,26 +543,20 @@ func (t *Thread) parseTitle(text string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Extract title after ":thread: "
-	if idx := strings.Index(text, ":thread: "); idx >= 0 {
-		t.title = text[idx+len(":thread: "):]
-	}
-
-	// 🔒 before :thread: means locked, absence means open
-	t.openAccess = !strings.Contains(text, "🔒:thread:")
 	t.allowedUsers = make(map[string]bool)
 	t.bannedUsers = make(map[string]bool)
 
-	// Parse "(🔓 <@U1> <@U2>)" — allowed users
-	if idx := strings.Index(t.title, " (🔓 "); idx >= 0 {
-		end := strings.Index(t.title[idx:], ")")
-		if end >= 0 {
-			extractMentions(t.title[idx:idx+end+1], t.allowedUsers)
-			t.title = strings.TrimSpace(t.title[:idx] + t.title[idx+end+1:])
-		}
+	// 🔒🧵 means locked to owner; plain 🧵 means open or selective
+	locked := strings.Contains(text, "🔒🧵")
+
+	// Extract content after 🧵 (with optional space)
+	if idx := strings.Index(text, "🧵 "); idx >= 0 {
+		t.title = text[idx+len("🧵 "):]
+	} else if idx := strings.Index(text, "🧵"); idx >= 0 {
+		t.title = text[idx+len("🧵"):]
 	}
 
-	// Parse "(🔒 <@U3>)" — banned users
+	// Parse "(🔒 <@U3>)" — banned users (strip from title)
 	if idx := strings.Index(t.title, " (🔒 "); idx >= 0 {
 		end := strings.Index(t.title[idx:], ")")
 		if end >= 0 {
@@ -569,6 +564,25 @@ func (t *Thread) parseTitle(text string) {
 			t.title = strings.TrimSpace(t.title[:idx] + t.title[idx+end+1:])
 		}
 	}
+
+	if locked {
+		t.openAccess = false
+		return
+	}
+
+	// Not locked: parse leading <@...> mentions as allowed users
+	for strings.HasPrefix(t.title, "<@") {
+		end := strings.Index(t.title, ">")
+		if end < 0 {
+			break
+		}
+		uid := t.title[2:end]
+		t.allowedUsers[uid] = true
+		t.title = strings.TrimLeft(t.title[end+1:], " ")
+	}
+
+	// If we found allowed users → selective (not fully open)
+	t.openAccess = len(t.allowedUsers) == 0
 }
 
 // extractMentions parses <@U...> mentions from a string into the target map.

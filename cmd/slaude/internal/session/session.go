@@ -29,6 +29,7 @@ type Config struct {
 	ChannelName    string   // display name (e.g. "#general" or "@haarchri")
 	ResumeThreadTS string   // Slack thread timestamp to resume
 	InstanceID     string   // slagent instance ID (for resume; empty = generate new)
+	OpenAccess     bool     // start with thread open for all participants
 	Debug          bool     // write raw JSON events to debug.log
 	Workspace      string   // Slack workspace (empty = default)
 	ClaudeArgs     []string // pass-through args for Claude subprocess
@@ -141,6 +142,11 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 		// Pass instance ID for block_id tagging (empty = generate new)
 		if cfg.InstanceID != "" {
 			opts = append(opts, slagent.WithInstanceID(cfg.InstanceID))
+		}
+
+		// Open access mode
+		if cfg.OpenAccess {
+			opts = append(opts, slagent.WithOpenAccess())
 		}
 
 		// Log Slack API calls in debug mode

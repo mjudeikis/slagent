@@ -130,7 +130,7 @@ The activity message is managed by Turn (compat backend). Tasks message is manag
 - `/close` — alias for `/lock`.
 - `/open` unbans a banned user. `/lock` removes from allowed.
 - Owner can never be banned.
-- Thread title reflects state: `:instanceID:🔒:thread: Topic` / `:instanceID:🔓:thread: Topic`.
-- Selective: `(🔓 for <@U1> <@U2>)`. Bans: `(🔒 for <@U3>)`.
+- Thread title reflects state: `:instanceID:🔒🧵 Topic` (locked) / `:instanceID:🧵 Topic` (open).
+- Selective: `:instanceID:🧵 <@U1> <@U2> Topic`. Bans: `(🔒 <@U3>)` appended.
 - Title is parsed on `Resume()` to recover access state.
 - Other slaude instances are subject to the same access rules via `isAuthorized()`.

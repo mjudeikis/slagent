@@ -33,6 +33,7 @@ var cli struct {
 type StartCmd struct {
 	Channel    string   `short:"c" help:"Slack channel name or ID." placeholder:"CHANNEL"`
 	User       []string `short:"u" help:"Slack user(s) for DM. Use multiple -u for group DM." placeholder:"USER"`
+	Open       bool     `help:"Start with thread open for all participants (default: locked to owner)."`
 	Topic      []string `arg:"" optional:"" help:"Planning topic."`
 	Debug      bool     `help:"Print raw JSON events from Claude to terminal."`
 	ClaudeArgs []string `name:"-" hidden:""`
@@ -91,6 +92,7 @@ func (cmd *StartCmd) Run() error {
 	cfg := session.Config{
 		Topic:      strings.Join(cmd.Topic, " "),
 		Channel:    cmd.Channel,
+		OpenAccess: cmd.Open,
 		Debug:      cmd.Debug,
 		Workspace:  cli.Workspace,
 		ClaudeArgs: cmd.ClaudeArgs,
