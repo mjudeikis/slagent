@@ -665,19 +665,13 @@ func parseInstancePrefix(text string) (instanceID, rest string, targeted bool) {
 
 	rest = text[end+2:] // skip past ":shortcode:"
 
-	// Require colon after shortcode: ":fox_face::" or ":fox_face: :" (Slack inserts space)
-	if strings.HasPrefix(rest, ":") {
-		rest = rest[1:]
-	} else if strings.HasPrefix(rest, " :") {
-		rest = rest[2:]
-	} else {
+	// Require colon after shortcode: ":fox_face::" or ":fox_face: :" (Slack inserts spaces)
+	// Trim any spaces Slack may have inserted between shortcode and trailing colon.
+	trimmed := strings.TrimLeft(rest, " ")
+	if !strings.HasPrefix(trimmed, ":") {
 		return "", text, false
 	}
-
-	// Strip optional space after the colon
-	if strings.HasPrefix(rest, " ") {
-		rest = rest[1:]
-	}
+	rest = strings.TrimLeft(trimmed[1:], " ")
 	return shortcode, rest, true
 }
 
