@@ -572,7 +572,7 @@ func (s *Session) readTurn(earlyTurn ...slagent.Turn) error {
 			lastToolID = fmt.Sprintf("t%d", toolSeq)
 			lastToolName = evt.ToolName
 			lastToolDetail = ""
-			s.ui.ToolActivity(formatTool(evt.ToolName, ""))
+			s.ui.ToolActivity(formatToolStart(evt.ToolName))
 			if turn != nil {
 				turn.Tool(lastToolID, evt.ToolName, slagent.ToolRunning, "")
 			}
@@ -1094,6 +1094,32 @@ func currentUser() string {
 		return "developer"
 	}
 	return u.Username
+}
+
+// formatToolStart returns a short label for a tool_start event (no input yet).
+func formatToolStart(toolName string) string {
+	switch toolName {
+	case "Read":
+		return "📄 Read"
+	case "Write":
+		return "📝 Write"
+	case "Edit":
+		return "📝 Edit"
+	case "Glob":
+		return "🔍 Glob"
+	case "Grep":
+		return "🔍 Grep"
+	case "Bash":
+		return "💻 Bash"
+	case "Agent":
+		return "🤖 Agent"
+	case "WebFetch":
+		return "🌐 WebFetch"
+	case "WebSearch":
+		return "🔎 WebSearch"
+	default:
+		return "🔧 " + toolName
+	}
 }
 
 // promptMsg holds a Slack message with reaction emojis for interactive response.
