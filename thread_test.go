@@ -1225,6 +1225,10 @@ func TestParseInstancePrefix(t *testing.T) {
 		{":fox_face::hello", "fox_face", "hello", true},
 		// Targeted with colon before /command
 		{":fox_face:: /open", "fox_face", "/open", true},
+		// Slack space variant: ":fox_face: :" (Slack inserts space before colon)
+		{":fox_face: : hello", "fox_face", "hello", true},
+		{":fox_face: :/open", "fox_face", "/open", true},
+		{":fox_face: : ", "fox_face", "", true},
 		// Without trailing colon — NOT targeted (must be explicit)
 		{":fox_face: hello", "", ":fox_face: hello", false},
 		// No prefix — not targeted
