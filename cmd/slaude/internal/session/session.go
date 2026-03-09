@@ -1049,6 +1049,8 @@ func toolDetail(toolName, rawInput string) string {
 		return str("query")
 	case "TodoWrite", "TaskCreate", "TaskUpdate":
 		return str("subject")
+	case "Skill":
+		return str("skill")
 	default:
 		return truncate(rawInput, 60)
 	}
@@ -1105,6 +1107,8 @@ func formatTool(toolName, rawInput string) string {
 		return "📋 switching to plan mode"
 	case "AskUserQuestion":
 		return fmt.Sprintf("❓ %s", str("question"))
+	case "Skill":
+		return fmt.Sprintf("⚡ %s", str("skill"))
 	default:
 		return fmt.Sprintf("🔧 %s: %s", toolName, truncate(rawInput, 60))
 	}
