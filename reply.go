@@ -93,12 +93,12 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 				continue
 			}
 			// Other instances' finalized text — deliver so agent perceives it
-		}
-
-		// Skip bot messages
-		if msg.BotID != "" {
-			t.advanceLastTS(msg.Timestamp)
-			continue
+		case blockNone:
+			// Not a slagent message — skip bot messages (webhooks, integrations)
+			if msg.BotID != "" {
+				t.advanceLastTS(msg.Timestamp)
+				continue
+			}
 		}
 
 		// Parse :shortcode:: prefix targeting
