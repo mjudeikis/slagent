@@ -18,10 +18,11 @@ import (
 type mockSlack struct {
 	server *httptest.Server
 
-	mu       sync.Mutex
-	messages []mockMessage          // posted messages
-	tsSeq    int                    // monotonic timestamp counter
-	streams  map[string]*mockStream // streamID → stream
+	mu        sync.Mutex
+	messages  []mockMessage          // posted messages
+	tsSeq     int                    // monotonic timestamp counter
+	streams   map[string]*mockStream // streamID → stream
+	reactions map[string]map[string]map[string]bool // msgTS → reaction → userIDs
 }
 
 type mockMessage struct {
@@ -46,7 +47,8 @@ type mockStream struct {
 
 func newMockSlack() *mockSlack {
 	m := &mockSlack{
-		streams: make(map[string]*mockStream),
+		streams:   make(map[string]*mockStream),
+		reactions: make(map[string]map[string]map[string]bool),
 	}
 	mux := http.NewServeMux()
 
@@ -58,6 +60,9 @@ func newMockSlack() *mockSlack {
 	mux.HandleFunc("/api/chat.getPermalink", m.handleGetPermalink)
 	mux.HandleFunc("/api/auth.test", m.handleAuthTest)
 	mux.HandleFunc("/api/users.info", m.handleUsersInfo)
+	mux.HandleFunc("/api/reactions.add", m.handleReactionsAdd)
+	mux.HandleFunc("/api/reactions.remove", m.handleReactionsRemove)
+	mux.HandleFunc("/api/reactions.get", m.handleReactionsGet)
 
 	// Native streaming endpoints
 	mux.HandleFunc("/api/chat.startStream", m.handleStartStream)
@@ -403,6 +408,78 @@ func (m *mockSlack) updateBlockID(ts, newBlockID string) {
 			}
 			return
 		}
+	}
+}
+
+// Reaction handlers
+
+func (m *mockSlack) handleReactionsAdd(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	name := r.FormValue("name")
+	ts := r.FormValue("timestamp")
+	// Use the token's identity as user — session tokens are the owner
+	userID := "U_OWNER"
+
+	m.mu.Lock()
+	if m.reactions[ts] == nil {
+		m.reactions[ts] = make(map[string]map[string]bool)
+	}
+	if m.reactions[ts][name] == nil {
+		m.reactions[ts][name] = make(map[string]bool)
+	}
+	m.reactions[ts][name][userID] = true
+	m.mu.Unlock()
+
+	m.respond(w, map[string]any{})
+}
+
+func (m *mockSlack) handleReactionsRemove(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	name := r.FormValue("name")
+	ts := r.FormValue("timestamp")
+	userID := "U_OWNER"
+
+	m.mu.Lock()
+	if m.reactions[ts] != nil && m.reactions[ts][name] != nil {
+		delete(m.reactions[ts][name], userID)
+	}
+	m.mu.Unlock()
+
+	m.respond(w, map[string]any{})
+}
+
+func (m *mockSlack) handleReactionsGet(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	ts := r.FormValue("timestamp")
+
+	m.mu.Lock()
+	var reactions []map[string]any
+	for name, users := range m.reactions[ts] {
+		var userList []string
+		for u := range users {
+			userList = append(userList, u)
+		}
+		if len(userList) > 0 {
+			reactions = append(reactions, map[string]any{
+				"name":  name,
+				"users": userList,
+			})
+		}
+	}
+	m.mu.Unlock()
+
+	m.respond(w, map[string]any{
+		"type":    "message",
+		"message": map[string]any{"reactions": reactions},
+	})
+}
+
+// simulateOwnerClick simulates the owner removing a reaction (clicking it in Slack).
+func (m *mockSlack) simulateOwnerClick(msgTS, reaction string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.reactions[msgTS] != nil && m.reactions[msgTS][reaction] != nil {
+		delete(m.reactions[msgTS][reaction], "U_OWNER")
 	}
 }
 
