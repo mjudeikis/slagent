@@ -137,7 +137,7 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 				continue
 			}
 			if msg.User != t.ownerID {
-				t.Post("🚫 Only the session owner can quit.")
+				t.Post(t.emoji + " 🚫 Only the session owner can quit.")
 				t.advanceLastTS(msg.Timestamp)
 				continue
 			}
@@ -166,7 +166,7 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 			// Handle slaude commands (/open, /lock, /close)
 			handled, feedback := t.handleCommand(msg.User, rest)
 			if feedback != "" {
-				t.Post(feedback)
+				t.Post(t.emoji + " " + feedback)
 			}
 			if handled {
 				t.advanceLastTS(msg.Timestamp)
@@ -175,9 +175,14 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 
 			// Unknown command — forward to Claude
 			if !t.isAuthorized(msg.User) {
-				t.Post("🚫 Not authorized.")
-				t.advanceLastTS(msg.Timestamp)
-				continue
+				if t.joined {
+					t.refreshTitle()
+				}
+				if !t.isAuthorized(msg.User) {
+					t.Post(t.emoji + " 🚫 Not authorized.")
+					t.advanceLastTS(msg.Timestamp)
+					continue
+				}
 			}
 			user := t.resolveUser(msg.User)
 			replies = append(replies, Reply{
@@ -189,11 +194,16 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 			continue
 		}
 
-		// Check authorization
+		// Check authorization — re-read title if joined and initially denied
 		if !t.isAuthorized(msg.User) {
-			t.Post("🚫 Not authorized. Ask the thread owner to `/open`.")
-			t.advanceLastTS(msg.Timestamp)
-			continue
+			if t.joined {
+				t.refreshTitle()
+			}
+			if !t.isAuthorized(msg.User) {
+				t.Post(t.emoji + " 🚫 Not authorized. Ask the thread owner to `/open`.")
+				t.advanceLastTS(msg.Timestamp)
+				continue
+			}
 		}
 
 		// Non-command messages are delivered to all instances.

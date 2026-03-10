@@ -634,6 +634,27 @@ func (t *Thread) Topic() string {
 	return t.topic
 }
 
+// refreshTitle re-fetches the thread parent message and re-parses the title.
+// Used by joined instances to pick up access changes made by the original instance.
+func (t *Thread) refreshTitle() {
+	t.mu.Lock()
+	threadTS := t.threadTS
+	t.mu.Unlock()
+
+	if threadTS == "" {
+		return
+	}
+	params := &slackapi.GetConversationRepliesParameters{
+		ChannelID: t.channel,
+		Timestamp: threadTS,
+		Limit:     1,
+	}
+	msgs, _, _, err := t.client.GetConversationReplies(params)
+	if err == nil && len(msgs) > 0 {
+		t.parseTitle(msgs[0].Text)
+	}
+}
+
 // parseTitle recovers access state from a thread parent message.
 // Handles both Unicode (🔒🧵) and Slack shortcode (:lock::thread:) formats.
 func (t *Thread) parseTitle(text string) {
