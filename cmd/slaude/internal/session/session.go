@@ -1057,7 +1057,7 @@ RED|NETWORK:POST:webhook.example.com/hook|Sending data to external webhook`, too
 	ctx, cancel := context.WithTimeout(ctx, classificationTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "text", "--model", "haiku", prompt)
+	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "text", "--model", "haiku", "--no-session-persistence", prompt)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
