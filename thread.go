@@ -362,14 +362,23 @@ func (t *Thread) PollReaction(msgTS string, expected []string) (string, error) {
 		}
 	}
 
-	// Check if any non-owner user added ❌ (deny)
+	// Check non-owner reactions
 	for _, r := range item.Reactions {
-		if r.Name != "x" {
-			continue
-		}
 		for _, u := range r.Users {
-			if u != t.ownerID {
+			if u == t.ownerID {
+				continue
+			}
+			switch r.Name {
+			case "x":
+				// Non-owner ❌ = deny
 				return "x", nil
+			case "white_check_mark", "floppy_disk":
+				// Non-owner tried to approve — remove their reaction and warn
+				t.client.RemoveReaction(r.Name, slackapi.ItemRef{
+					Channel:   t.channel,
+					Timestamp: msgTS,
+				})
+				t.Post(fmt.Sprintf("<@%s> Only the session owner can approve permissions.", u))
 			}
 		}
 	}
