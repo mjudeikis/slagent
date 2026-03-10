@@ -195,6 +195,9 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 			}
 		}
 
+		// Update session config with resolved workspace settings
+		sess.cfg = cfg
+
 		// Pass instance ID for block_id tagging (empty = generate new)
 		if cfg.InstanceID != "" {
 			opts = append(opts, slagent.WithInstanceID(cfg.InstanceID))
