@@ -1284,7 +1284,7 @@ func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.Permissi
 	// Escalate to Slack
 	prompt := fmt.Sprintf("%s%s *Permission request*: %s", emoji, netTag, req.ToolName)
 	if detail != "" {
-		prompt += ": " + detail
+		prompt += ": `" + detail + "`"
 	}
 
 	// Show network destination prominently, then criticality and reasoning
