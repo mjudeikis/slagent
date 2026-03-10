@@ -4,6 +4,7 @@ package client
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	slackapi "github.com/slack-go/slack"
 )
@@ -31,25 +32,35 @@ func (c *Client) SetEnterprise(v bool) { c.enterprise = v }
 // ErrEnterprise is returned when a Slack API method is restricted on enterprise grid.
 var ErrEnterprise = fmt.Errorf("enterprise grid workspace restricts this API (token would be invalidated)")
 
-// GetConversationInfo overrides the embedded method to block on enterprise grid.
+// enterpriseBlocked returns true if this is an enterprise grid workspace with
+// a session token (xoxc-). User tokens (xoxp-) and bot tokens (xoxb-) from
+// Slack apps work fine on enterprise and are not blocked.
+func (c *Client) enterpriseBlocked() bool {
+	return c.enterprise && strings.HasPrefix(c.token, "xoxc-")
+}
+
+// GetConversationInfo overrides the embedded method to block on enterprise grid
+// with session tokens.
 func (c *Client) GetConversationInfo(input *slackapi.GetConversationInfoInput) (*slackapi.Channel, error) {
-	if c.enterprise {
+	if c.enterpriseBlocked() {
 		return nil, ErrEnterprise
 	}
 	return c.Client.GetConversationInfo(input)
 }
 
-// GetConversationsForUser overrides the embedded method to block on enterprise grid.
+// GetConversationsForUser overrides the embedded method to block on enterprise grid
+// with session tokens.
 func (c *Client) GetConversationsForUser(params *slackapi.GetConversationsForUserParameters) ([]slackapi.Channel, string, error) {
-	if c.enterprise {
+	if c.enterpriseBlocked() {
 		return nil, "", ErrEnterprise
 	}
 	return c.Client.GetConversationsForUser(params)
 }
 
-// GetConversationHistory overrides the embedded method to block on enterprise grid.
+// GetConversationHistory overrides the embedded method to block on enterprise grid
+// with session tokens.
 func (c *Client) GetConversationHistory(params *slackapi.GetConversationHistoryParameters) (*slackapi.GetConversationHistoryResponse, error) {
-	if c.enterprise {
+	if c.enterpriseBlocked() {
 		return nil, ErrEnterprise
 	}
 	return c.Client.GetConversationHistory(params)
