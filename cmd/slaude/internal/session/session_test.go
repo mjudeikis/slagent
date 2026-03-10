@@ -65,6 +65,58 @@ func TestInteractivePromptMultiChoiceReturnsPrompt(t *testing.T) {
 	}
 }
 
+func TestInteractivePromptQuestionsFormat(t *testing.T) {
+	input, _ := json.Marshal(map[string]any{
+		"questions": []map[string]any{
+			{
+				"question": "What kind of opponent?",
+				"header":   "Game mode",
+				"options": []map[string]any{
+					{"label": "Human vs AI", "description": "Play against computer"},
+					{"label": "Human vs Human", "description": "Two players"},
+				},
+				"multiSelect": false,
+			},
+			{
+				"question": "Where to create?",
+				"header":   "Location",
+				"options": []map[string]any{
+					{"label": "~/src/tictactoe", "description": "New directory"},
+					{"label": "Current directory", "description": "Right here"},
+				},
+				"multiSelect": false,
+			},
+		},
+	})
+
+	result := interactivePrompt("AskUserQuestion", string(input), "U123")
+	if result == nil {
+		t.Fatal("questions format should return a prompt")
+	}
+
+	// 4 options total = 4 reactions
+	if len(result.reactions) != 4 {
+		t.Errorf("reactions = %d, want 4", len(result.reactions))
+	}
+
+	// Should contain both questions and all options
+	if !strings.Contains(result.text, "What kind of opponent?") {
+		t.Errorf("should contain first question, got: %q", result.text)
+	}
+	if !strings.Contains(result.text, "Where to create?") {
+		t.Errorf("should contain second question, got: %q", result.text)
+	}
+	if !strings.Contains(result.text, "Human vs AI") {
+		t.Errorf("should contain option label, got: %q", result.text)
+	}
+	if !strings.Contains(result.text, "Play against computer") {
+		t.Errorf("should contain option description, got: %q", result.text)
+	}
+	if !strings.Contains(result.text, "<@U123>") {
+		t.Errorf("should contain mention, got: %q", result.text)
+	}
+}
+
 func TestInteractivePromptExitPlanMode(t *testing.T) {
 	result := interactivePrompt("ExitPlanMode", "{}", "U123")
 	if result == nil {

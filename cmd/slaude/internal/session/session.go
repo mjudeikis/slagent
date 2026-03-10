@@ -1565,9 +1565,55 @@ func interactivePrompt(toolName, rawInput, ownerID string) *promptMsg {
 			reactions: []string{"white_check_mark", "x"},
 		}
 	case "AskUserQuestion":
-		q := str("question")
+		// New format: questions array with options
+		if raw, ok := input["questions"]; ok {
+			if arr, ok := raw.([]interface{}); ok && len(arr) > 0 {
+				var lines []string
+				var reactions []string
+				lines = append(lines, fmt.Sprintf("❓ *Claude asks:*%s\n", mention))
+				optIdx := 0
+				for _, qRaw := range arr {
+					qMap, ok := qRaw.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					qText, _ := qMap["question"].(string)
+					opts, _ := qMap["options"].([]interface{})
+					if len(opts) == 0 {
+						continue
+					}
+					lines = append(lines, fmt.Sprintf("*%s*", qText))
+					for _, optRaw := range opts {
+						if optIdx >= len(numberReactions) {
+							break
+						}
+						opt, ok := optRaw.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						label, _ := opt["label"].(string)
+						desc, _ := opt["description"].(string)
+						if desc != "" {
+							lines = append(lines, fmt.Sprintf("%s  %s — %s", numberEmoji(optIdx), label, desc))
+						} else {
+							lines = append(lines, fmt.Sprintf("%s  %s", numberEmoji(optIdx), label))
+						}
+						reactions = append(reactions, numberReactions[optIdx])
+						optIdx++
+					}
+					lines = append(lines, "")
+				}
+				if len(reactions) > 0 {
+					return &promptMsg{
+						text:      strings.TrimRight(strings.Join(lines, "\n"), "\n"),
+						reactions: reactions,
+					}
+				}
+			}
+		}
 
-		// Check for allowedPrompts (multiple choice options)
+		// Legacy format: allowedPrompts
+		q := str("question")
 		if raw, ok := input["allowedPrompts"]; ok {
 			if arr, ok := raw.([]interface{}); ok && len(arr) > 0 {
 				var lines []string
