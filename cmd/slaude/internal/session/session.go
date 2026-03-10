@@ -644,7 +644,7 @@ func (s *Session) readTurn(earlyTurn ...slagent.Turn) error {
 			// Post code diffs/content for Edit and Write tools
 			if s.thread != nil {
 				if block := toolCodeBlock(evt.ToolName, evt.ToolInput); block != "" {
-					s.thread.Post(block)
+					s.thread.Post(s.thread.Emoji() + " " + block)
 				}
 			}
 
