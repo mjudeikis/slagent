@@ -419,6 +419,15 @@ func (c *compatTurn) finish() error {
 	// Update existing text message with full content — use final block_id (no suffix)
 	opts := textMsgOpts(finalText, c.blockID, c.emoji)
 	finalConverted := c.emoji + " " + MarkdownToMrkdwn(finalText)
+
+	// If activity is below the text message, delete old text and repost below activity
+	// so the final order is: activity (tools), then text.
+	if c.textTS != "" && c.activityTS != "" && c.textTS < c.activityTS {
+		c.logSlack("deleteMessage(text/repost)", c.textTS)
+		c.api.DeleteMessage(c.channel, c.textTS)
+		c.textTS = ""
+	}
+
 	if c.textTS != "" {
 		c.logSlack("updateMessage(text/final)", finalConverted)
 		c.api.UpdateMessage(c.channel, c.textTS, opts...)
