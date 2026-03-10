@@ -96,6 +96,11 @@ func (t *Thread) Emoji() string {
 	return t.emoji
 }
 
+// ThinkingEmoji returns the Slack shortcode for thinking/running indicator.
+func (t *Thread) ThinkingEmoji() string {
+	return t.config.thinkingEmoji
+}
+
 // logSlack writes a Slack API action to the Thread's log writer if configured.
 func (t *Thread) logSlack(action, content string) {
 	if t.config.slackLog == nil {
@@ -401,6 +406,31 @@ func (t *Thread) FinalizeReaction(msgTS, selected string, all []string) {
 			t.client.RemoveReaction(r, ref)
 		}
 	}
+}
+
+// GetReactions returns the reactions on a message.
+func (t *Thread) GetReactions(msgTS string) ([]slackapi.ItemReaction, error) {
+	item, err := t.client.GetReactions(slackapi.ItemRef{
+		Channel:   t.channel,
+		Timestamp: msgTS,
+	}, slackapi.NewGetReactionsParameters())
+	if err != nil {
+		return nil, err
+	}
+	return item.Reactions, nil
+}
+
+// RemoveAllReactions removes all given reactions from a message.
+func (t *Thread) RemoveAllReactions(msgTS string, reactions []string) {
+	ref := slackapi.ItemRef{Channel: t.channel, Timestamp: msgTS}
+	for _, r := range reactions {
+		t.client.RemoveReaction(r, ref)
+	}
+}
+
+// AddReaction adds a single reaction to a message.
+func (t *Thread) AddReaction(msgTS, reaction string) {
+	t.client.AddReaction(reaction, slackapi.ItemRef{Channel: t.channel, Timestamp: msgTS})
 }
 
 // DeleteMessage deletes a message from the thread.

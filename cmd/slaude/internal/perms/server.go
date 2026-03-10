@@ -151,10 +151,16 @@ func forwardToParent(socketPath string, params *toolCallParams, id int64) (strin
 		"behavior": resp.Behavior,
 	}
 	if resp.Behavior == "allow" {
-		// updatedInput is required for allow — pass through the original input
-		var input interface{}
-		json.Unmarshal(params.Arguments.Input, &input)
-		result["updatedInput"] = input
+		// updatedInput is required for allow — use updated input if provided, else pass through original
+		if resp.UpdatedInput != nil {
+			var input interface{}
+			json.Unmarshal(resp.UpdatedInput, &input)
+			result["updatedInput"] = input
+		} else {
+			var input interface{}
+			json.Unmarshal(params.Arguments.Input, &input)
+			result["updatedInput"] = input
+		}
 	} else {
 		msg := resp.Message
 		if msg == "" {
@@ -181,8 +187,9 @@ type PermissionRequest struct {
 
 // PermissionResponse is sent from the parent slaude process back to the MCP server.
 type PermissionResponse struct {
-	Behavior string `json:"behavior"` // "allow" or "deny"
-	Message  string `json:"message,omitempty"`
+	Behavior     string          `json:"behavior"`                // "allow" or "deny"
+	Message      string          `json:"message,omitempty"`
+	UpdatedInput json.RawMessage `json:"updated_input,omitempty"` // if set, replaces original input in allow response
 }
 
 // JSON-RPC types

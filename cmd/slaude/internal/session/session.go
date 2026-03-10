@@ -1162,6 +1162,364 @@ func levelAllowed(level, threshold string) bool {
 	}
 }
 
+// questionTimeout is how long to wait for AskUserQuestion answers.
+const questionTimeout = 10 * time.Minute
+
+// askQuestion holds state for a single question being polled via Slack reactions.
+type askQuestion struct {
+	text        string   // question text
+	options     []askOption
+	multiSelect bool
+	msgTS       string   // Slack message timestamp
+	reactions   []string // reaction names (number reactions + optional submit + cancel)
+	selected    map[int]bool // selected option indices (for multi-select toggling)
+	answered    bool     // single-select: has selection; multi-select: submitted
+	answerIdx   int      // single-select: selected index (-1 = none)
+}
+
+// askOption holds a single option in a question.
+type askOption struct {
+	Label       string
+	Description string
+}
+
+// handleAskUserQuestion processes AskUserQuestion by posting per-question Slack
+// messages with reactions and polling for answers.
+func (s *Session) handleAskUserQuestion(req *perms.PermissionRequest) *perms.PermissionResponse {
+	var input map[string]interface{}
+	if err := json.Unmarshal(req.Input, &input); err != nil {
+		return &perms.PermissionResponse{Behavior: "allow"}
+	}
+
+	// Parse questions array
+	rawQuestions, ok := input["questions"]
+	if !ok {
+		// No questions format — auto-approve (free-text handled in readTurn)
+		return &perms.PermissionResponse{Behavior: "allow"}
+	}
+	questionsArr, ok := rawQuestions.([]interface{})
+	if !ok || len(questionsArr) == 0 {
+		return &perms.PermissionResponse{Behavior: "allow"}
+	}
+
+	emoji := ""
+	thinkingEmoji := ":claude:"
+	ownerMention := ""
+	if s.thread != nil {
+		emoji = s.thread.Emoji()
+		thinkingEmoji = s.thread.ThinkingEmoji()
+		if ownerID := s.thread.OwnerID(); ownerID != "" {
+			ownerMention = fmt.Sprintf(" <@%s>", ownerID)
+		}
+	}
+
+	// Build question structs and post messages
+	var questions []*askQuestion
+	for _, qRaw := range questionsArr {
+		qMap, ok := qRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		qText, _ := qMap["question"].(string)
+		multiSelect, _ := qMap["multiSelect"].(bool)
+		optsRaw, _ := qMap["options"].([]interface{})
+		if len(optsRaw) == 0 {
+			continue
+		}
+
+		q := &askQuestion{
+			text:        qText,
+			multiSelect: multiSelect,
+			selected:    make(map[int]bool),
+			answerIdx:   -1,
+		}
+
+		for _, optRaw := range optsRaw {
+			opt, ok := optRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			label, _ := opt["label"].(string)
+			desc, _ := opt["description"].(string)
+			q.options = append(q.options, askOption{Label: label, Description: desc})
+		}
+
+		// Build reactions: number reactions + optional submit + cancel
+		for i := range q.options {
+			if i >= len(numberReactions) {
+				break
+			}
+			q.reactions = append(q.reactions, numberReactions[i])
+		}
+		if multiSelect {
+			q.reactions = append(q.reactions, "white_check_mark")
+		}
+		q.reactions = append(q.reactions, "x")
+
+		// Post question message
+		text := s.renderQuestion(q, emoji, thinkingEmoji, ownerMention)
+		msgTS, err := s.thread.PostPrompt(text, q.reactions)
+		if err != nil {
+			s.ui.Error(fmt.Sprintf("failed to post question: %v", err))
+			return &perms.PermissionResponse{Behavior: "allow"}
+		}
+		q.msgTS = msgTS
+		questions = append(questions, q)
+	}
+
+	if len(questions) == 0 {
+		return &perms.PermissionResponse{Behavior: "allow"}
+	}
+
+	// Show in terminal
+	s.ui.ToolActivity("  ❓ AskUserQuestion — awaiting answers in Slack...")
+
+	// Poll for answers
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	deadline := time.Now().Add(questionTimeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-s.ctx.Done():
+			// Cancel all questions
+			for _, q := range questions {
+				s.finalizeQuestion(q, emoji, ownerMention, true)
+			}
+			return &perms.PermissionResponse{Behavior: "deny", Message: "session cancelled"}
+		case <-ticker.C:
+		}
+
+		cancelled := false
+		for _, q := range questions {
+			if q.answered {
+				continue
+			}
+			if s.pollQuestion(q, emoji, thinkingEmoji, ownerMention) {
+				// ❌ was clicked — cancel all
+				cancelled = true
+				break
+			}
+		}
+
+		if cancelled {
+			for _, q := range questions {
+				s.finalizeQuestion(q, emoji, ownerMention, true)
+			}
+			s.ui.ToolActivity("  ❌ AskUserQuestion — cancelled")
+			return &perms.PermissionResponse{Behavior: "deny", Message: "cancelled by user"}
+		}
+
+		// Check if all answered
+		allDone := true
+		for _, q := range questions {
+			if !q.answered {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			break
+		}
+	}
+
+	// Check for timeout
+	allDone := true
+	for _, q := range questions {
+		if !q.answered {
+			allDone = false
+			break
+		}
+	}
+	if !allDone {
+		for _, q := range questions {
+			s.finalizeQuestion(q, emoji, ownerMention, true)
+		}
+		s.ui.ToolActivity("  ⏰ AskUserQuestion — timed out")
+		return &perms.PermissionResponse{Behavior: "deny", Message: "question timed out"}
+	}
+
+	// All answered — finalize messages (remove thinking emoji + reactions)
+	for _, q := range questions {
+		s.finalizeQuestion(q, emoji, ownerMention, false)
+	}
+
+	// Build answers map
+	answers := make(map[string]string)
+	for _, q := range questions {
+		if q.multiSelect {
+			var labels []string
+			for i, opt := range q.options {
+				if q.selected[i] {
+					labels = append(labels, opt.Label)
+				}
+			}
+			answers[q.text] = strings.Join(labels, ", ")
+		} else if q.answerIdx >= 0 && q.answerIdx < len(q.options) {
+			answers[q.text] = q.options[q.answerIdx].Label
+		}
+	}
+
+	// Build updatedInput with answers
+	input["answers"] = answers
+	updatedInput, _ := json.Marshal(input)
+
+	s.ui.ToolActivity("  ✅ AskUserQuestion — answered")
+	return &perms.PermissionResponse{Behavior: "allow", UpdatedInput: updatedInput}
+}
+
+// renderQuestion builds the Slack mrkdwn text for a question.
+func (s *Session) renderQuestion(q *askQuestion, emoji, thinkingEmoji, ownerMention string) string {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("%s%s%s", emoji, thinkingEmoji, ownerMention))
+	lines = append(lines, fmt.Sprintf("> *%s*", q.text))
+	for i, opt := range q.options {
+		if i >= len(numberReactions) {
+			break
+		}
+		marker := " "
+		if q.multiSelect {
+			if q.selected[i] {
+				marker = "👉"
+			}
+		} else if q.answerIdx == i {
+			marker = "👉"
+		}
+		if opt.Description != "" {
+			lines = append(lines, fmt.Sprintf("> %s %s *%s* — %s", numberEmoji(i), marker, opt.Label, opt.Description))
+		} else {
+			lines = append(lines, fmt.Sprintf("> %s %s *%s*", numberEmoji(i), marker, opt.Label))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderQuestionFinal builds the Slack mrkdwn text without thinking emoji.
+func (s *Session) renderQuestionFinal(q *askQuestion, emoji, ownerMention string, cancelled bool) string {
+	var lines []string
+	if cancelled {
+		lines = append(lines, fmt.Sprintf("%s%s ❌", emoji, ownerMention))
+	} else {
+		lines = append(lines, fmt.Sprintf("%s%s", emoji, ownerMention))
+	}
+	lines = append(lines, fmt.Sprintf("> *%s*", q.text))
+	for i, opt := range q.options {
+		if i >= len(numberReactions) {
+			break
+		}
+		marker := " "
+		if q.multiSelect {
+			if q.selected[i] {
+				marker = "👉"
+			}
+		} else if q.answerIdx == i {
+			marker = "👉"
+		}
+		if opt.Description != "" {
+			lines = append(lines, fmt.Sprintf("> %s %s *%s* — %s", numberEmoji(i), marker, opt.Label, opt.Description))
+		} else {
+			lines = append(lines, fmt.Sprintf("> %s %s *%s*", numberEmoji(i), marker, opt.Label))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// pollQuestion checks reactions for one question. Returns true if cancelled.
+func (s *Session) pollQuestion(q *askQuestion, emoji, thinkingEmoji, ownerMention string) bool {
+	item, err := s.thread.GetReactions(q.msgTS)
+	if err != nil {
+		return false
+	}
+
+	ownerID := s.thread.OwnerID()
+
+	// Build map of which reactions the owner is still present on
+	ownerPresent := make(map[string]bool)
+	for _, r := range item {
+		for _, u := range r.Users {
+			if u == ownerID {
+				ownerPresent[r.Name] = true
+				break
+			}
+		}
+	}
+
+	// Check for cancel (owner or non-owner)
+	for _, r := range item {
+		if r.Name != "x" {
+			continue
+		}
+		if !ownerPresent["x"] {
+			return true // owner cancelled
+		}
+		for _, u := range r.Users {
+			if u != ownerID {
+				return true // non-owner cancelled
+			}
+		}
+	}
+
+	// Check number reactions
+	for i := range q.options {
+		if i >= len(numberReactions) {
+			break
+		}
+		rName := numberReactions[i]
+		if !ownerPresent[rName] {
+			// Owner removed this reaction — selection
+
+			if q.multiSelect {
+				// Toggle selection
+				q.selected[i] = !q.selected[i]
+			} else {
+				// Single-select: switch to this option
+				q.answerIdx = i
+				q.answered = true
+			}
+
+			// Re-add the reaction so owner can click again
+			s.thread.AddReaction(q.msgTS, rName)
+
+			// Update message text
+			text := s.renderQuestion(q, emoji, thinkingEmoji, ownerMention)
+			s.thread.UpdateMessage(q.msgTS, text)
+		}
+	}
+
+	// Check submit for multi-select
+	if q.multiSelect && !ownerPresent["white_check_mark"] {
+		// Owner clicked submit — check if any selected
+		hasSelection := false
+		for _, sel := range q.selected {
+			if sel {
+				hasSelection = true
+				break
+			}
+		}
+		if hasSelection {
+			q.answered = true
+		}
+		// Re-add submit reaction
+		s.thread.AddReaction(q.msgTS, "white_check_mark")
+	}
+
+	return false
+}
+
+// finalizeQuestion updates the message text (remove thinking emoji) and removes all reactions.
+func (s *Session) finalizeQuestion(q *askQuestion, emoji, ownerMention string, cancelled bool) {
+	if q.msgTS == "" {
+		return
+	}
+
+	// Update text without thinking emoji
+	text := s.renderQuestionFinal(q, emoji, ownerMention, cancelled)
+	s.thread.UpdateMessage(q.msgTS, text)
+
+	// Remove all reactions
+	s.thread.RemoveAllReactions(q.msgTS, q.reactions)
+}
+
 // permissionTimeout is how long to wait for the owner to approve/deny a tool.
 const permissionTimeout = 5 * time.Minute
 
@@ -1179,10 +1537,11 @@ func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.Permissi
 
 	// Auto-approve safe interactive tools that don't need classification
 	switch req.ToolName {
-	case "AskUserQuestion",
-		"TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList":
+	case "TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList":
 		s.ui.ToolActivity(fmt.Sprintf("  ✅ %s: %s", req.ToolName, detail))
 		return &perms.PermissionResponse{Behavior: "allow"}
+	case "AskUserQuestion":
+		return s.handleAskUserQuestion(req)
 	}
 
 	// Classify the permission request via AI
@@ -1571,54 +1930,7 @@ func interactivePrompt(toolName, rawInput, ownerID, emoji string) *promptMsg {
 			reactions: []string{"white_check_mark", "x"},
 		}
 	case "AskUserQuestion":
-		// New format: questions array with options
-		if raw, ok := input["questions"]; ok {
-			if arr, ok := raw.([]interface{}); ok && len(arr) > 0 {
-				var lines []string
-				var reactions []string
-				lines = append(lines, fmt.Sprintf("%s%s", prefix, mention))
-				optIdx := 0
-				for _, qRaw := range arr {
-					qMap, ok := qRaw.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					qText, _ := qMap["question"].(string)
-					opts, _ := qMap["options"].([]interface{})
-					if len(opts) == 0 {
-						continue
-					}
-
-					// Quote the question and options with > for visual framing
-					lines = append(lines, fmt.Sprintf("> *%s*", qText))
-					for _, optRaw := range opts {
-						if optIdx >= len(numberReactions) {
-							break
-						}
-						opt, ok := optRaw.(map[string]interface{})
-						if !ok {
-							continue
-						}
-						label, _ := opt["label"].(string)
-						desc, _ := opt["description"].(string)
-						if desc != "" {
-							lines = append(lines, fmt.Sprintf("> %s  *%s* — %s", numberEmoji(optIdx), label, desc))
-						} else {
-							lines = append(lines, fmt.Sprintf("> %s  *%s*", numberEmoji(optIdx), label))
-						}
-						reactions = append(reactions, numberReactions[optIdx])
-						optIdx++
-					}
-					lines = append(lines, "")
-				}
-				if len(reactions) > 0 {
-					return &promptMsg{
-						text:      strings.TrimRight(strings.Join(lines, "\n"), "\n"),
-						reactions: reactions,
-					}
-				}
-			}
-		}
+		// New questions format is handled by handleAskUserQuestion via MCP permission flow.
 
 		// Legacy format: allowedPrompts
 		q := str("question")
