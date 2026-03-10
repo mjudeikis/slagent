@@ -174,6 +174,12 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 			}
 		}
 
+		// Load workspace config for thinking emoji etc.
+		wsCfg := loadWorkspaceConfig(cfg.Workspace)
+		if wsCfg.ThinkingEmoji != "" {
+			opts = append(opts, slagent.WithThinkingEmoji(wsCfg.ThinkingEmoji))
+		}
+
 		// Pass instance ID for block_id tagging (empty = generate new)
 		if cfg.InstanceID != "" {
 			opts = append(opts, slagent.WithInstanceID(cfg.InstanceID))
@@ -894,6 +900,72 @@ func unquote(s string) string {
 		return s[1 : len(s)-1]
 	}
 	return s
+}
+
+// workspaceConfig holds per-workspace settings from ~/.config/slagent/config.yaml.
+type workspaceConfig struct {
+	ThinkingEmoji string // Slack shortcode for thinking indicator (e.g. ":claude-thinking:")
+}
+
+// loadWorkspaceConfig loads workspace-specific settings from config.yaml.
+//
+// File format:
+//
+//	workspaces:
+//	  nvidia.enterprise.slack.com:
+//	    thinking-emoji: ":claude-thinking:"
+//	  myteam.slack.com:
+//	    thinking-emoji: ":claude:"
+func loadWorkspaceConfig(workspace string) workspaceConfig {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return workspaceConfig{}
+	}
+	cfgPath := filepath.Join(home, ".config", "slagent", "config.yaml")
+	return parseConfigFile(cfgPath, workspace)
+}
+
+// parseConfigFile reads a config.yaml and returns settings for the given workspace.
+func parseConfigFile(filePath, workspace string) workspaceConfig {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return workspaceConfig{}
+	}
+	defer f.Close()
+
+	var cfg workspaceConfig
+	var currentWorkspace string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+
+		// Skip empty lines and comments
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// "workspaces:" header
+		if trimmed == "workspaces:" {
+			continue
+		}
+
+		// Workspace key: "  nvidia.enterprise.slack.com:" (2-space indent, ends with :)
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(trimmed, ":") {
+			currentWorkspace = strings.TrimSuffix(trimmed, ":")
+			continue
+		}
+
+		// Setting under workspace: "    thinking-emoji: :claude-thinking:" (4-space indent)
+		if strings.HasPrefix(line, "    ") && currentWorkspace == workspace {
+			if strings.HasPrefix(trimmed, "thinking-emoji:") {
+				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "thinking-emoji:"))
+				cfg.ThinkingEmoji = unquote(value)
+			}
+		}
+	}
+
+	return cfg
 }
 
 // autoApproveSummary returns a human-readable summary of the auto-approve policy.

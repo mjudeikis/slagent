@@ -44,6 +44,7 @@ type threadConfig struct {
 	markdownConverter func(string) string
 	apiURL            string     // base URL for native streaming API calls (testing)
 	slackLog          io.Writer  // if non-nil, log all Slack API calls here
+	thinkingEmoji     string     // Slack shortcode for thinking indicator (e.g. ":claude:")
 }
 
 // identityEmojis maps Slack short codes to emoji for identity selection.
@@ -128,7 +129,14 @@ func defaultConfig() threadConfig {
 		pollInterval:      1 * time.Second,
 		bufferSize:        256,
 		markdownConverter: MarkdownToMrkdwn,
+		thinkingEmoji:     ":claude:",
 	}
+}
+
+// WithThinkingEmoji sets the Slack shortcode used as thinking/running indicator.
+// Default is ":claude:". Example: ":claude-thinking:" for workspaces with custom emoji.
+func WithThinkingEmoji(shortcode string) ThreadOption {
+	return func(c *threadConfig) { c.thinkingEmoji = shortcode }
 }
 
 // WithOwner restricts the thread to only accept input from the given user ID.

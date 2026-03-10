@@ -558,6 +558,43 @@ func TestLoadKnownHostsDefaults(t *testing.T) {
 	}
 }
 
+func TestParseConfigFile(t *testing.T) {
+	content := `# slagent config
+workspaces:
+  nvidia.enterprise.slack.com:
+    thinking-emoji: ":claude-thinking:"
+  myteam.slack.com:
+    thinking-emoji: ":claude:"
+`
+	tmp := t.TempDir()
+	path := tmp + "/config.yaml"
+	os.WriteFile(path, []byte(content), 0644)
+
+	// Match first workspace
+	cfg := parseConfigFile(path, "nvidia.enterprise.slack.com")
+	if cfg.ThinkingEmoji != ":claude-thinking:" {
+		t.Errorf("ThinkingEmoji = %q, want %q", cfg.ThinkingEmoji, ":claude-thinking:")
+	}
+
+	// Match second workspace
+	cfg = parseConfigFile(path, "myteam.slack.com")
+	if cfg.ThinkingEmoji != ":claude:" {
+		t.Errorf("ThinkingEmoji = %q, want %q", cfg.ThinkingEmoji, ":claude:")
+	}
+
+	// No match
+	cfg = parseConfigFile(path, "other.slack.com")
+	if cfg.ThinkingEmoji != "" {
+		t.Errorf("ThinkingEmoji = %q, want empty", cfg.ThinkingEmoji)
+	}
+
+	// Missing file
+	cfg = parseConfigFile(tmp+"/nonexistent.yaml", "nvidia.enterprise.slack.com")
+	if cfg.ThinkingEmoji != "" {
+		t.Errorf("ThinkingEmoji = %q, want empty for missing file", cfg.ThinkingEmoji)
+	}
+}
+
 func TestLevelEmoji(t *testing.T) {
 	if e := levelEmoji("green"); e != "🟢" {
 		t.Errorf("green = %q", e)

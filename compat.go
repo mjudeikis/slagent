@@ -21,12 +21,13 @@ const (
 // Text streams in a separate message (last 6 lines while streaming, full text on finish).
 // No messages are ever deleted.
 type compatTurn struct {
-	api      *slackapi.Client
-	channel  string
-	threadTS string
-	blockID  string    // slagent block_id for message tagging
-	emoji    string    // identity emoji prefix for text messages
-	slackLog io.Writer // optional Slack API logger
+	api           *slackapi.Client
+	channel       string
+	threadTS      string
+	blockID       string    // slagent block_id for message tagging
+	emoji         string    // identity emoji prefix for text messages
+	thinkingEmoji string    // Slack shortcode for thinking/running indicator
+	slackLog      io.Writer // optional Slack API logger
 
 	// Unified activity message (thinking + tools + status)
 	thinkBuf   strings.Builder // accumulated thinking text
@@ -48,15 +49,16 @@ type compatTurn struct {
 	mu sync.Mutex
 }
 
-func newCompatTurn(api *slackapi.Client, channel, threadTS, blockID, emoji string, slackLog io.Writer) *compatTurn {
+func newCompatTurn(api *slackapi.Client, channel, threadTS, blockID, emoji, thinkingEmoji string, slackLog io.Writer) *compatTurn {
 	return &compatTurn{
-		api:       api,
-		channel:   channel,
-		threadTS:  threadTS,
-		blockID:   blockID,
-		emoji:     emoji,
-		slackLog:  slackLog,
-		toolIndex: make(map[string]int),
+		api:           api,
+		channel:       channel,
+		threadTS:      threadTS,
+		blockID:       blockID,
+		emoji:         emoji,
+		thinkingEmoji: thinkingEmoji,
+		slackLog:      slackLog,
+		toolIndex:     make(map[string]int),
 	}
 }
 
@@ -91,7 +93,7 @@ func (c *compatTurn) renderActivity() string {
 
 	// Thinking lines
 	if c.thinkBuf.Len() > 0 {
-		lines = append(lines, c.emoji+":claude:")
+		lines = append(lines, c.emoji+c.thinkingEmoji)
 		thinkText := c.thinkBuf.String()
 		if len(thinkText) > 500 {
 			thinkText = "…" + thinkText[len(thinkText)-499:]
@@ -249,7 +251,7 @@ func (c *compatTurn) writeTool(id, name, status, detail string) {
 	case ToolError:
 		icon = "❌"
 	default:
-		icon = ":claude:"
+		icon = c.thinkingEmoji
 	}
 
 	line := fmt.Sprintf("%s %s", icon, summary)
