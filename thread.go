@@ -362,6 +362,18 @@ func (t *Thread) PollReaction(msgTS string, expected []string) (string, error) {
 		}
 	}
 
+	// Check if any non-owner user added ❌ (deny)
+	for _, r := range item.Reactions {
+		if r.Name != "x" {
+			continue
+		}
+		for _, u := range r.Users {
+			if u != t.ownerID {
+				return "x", nil
+			}
+		}
+	}
+
 	return "", nil
 }
 

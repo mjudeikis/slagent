@@ -1219,7 +1219,7 @@ func (s *Session) handlePermission(req *perms.PermissionRequest) *perms.Permissi
 		case "x":
 			s.thread.DeleteMessage(msgTS)
 			s.ui.ToolActivity(fmt.Sprintf("  ❌ Denied: %s: %s", req.ToolName, detail))
-			return &perms.PermissionResponse{Behavior: "deny", Message: "denied by owner via Slack"}
+			return &perms.PermissionResponse{Behavior: "deny", Message: "denied via Slack"}
 		}
 	}
 
