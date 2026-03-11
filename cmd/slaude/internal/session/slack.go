@@ -186,6 +186,8 @@ func (s *Session) startThread() error {
 		s.thread.Resume(s.cfg.ResumeThreadTS, s.cfg.ResumeAfterTS)
 		if s.cfg.ClosedAccess {
 			s.thread.SetClosed()
+		} else if s.cfg.OpenAccess {
+			s.thread.SetOpen()
 		}
 		return nil
 	}

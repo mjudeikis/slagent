@@ -795,6 +795,14 @@ func (t *Thread) SetClosed() {
 	t.bannedUsers = make(map[string]bool)
 }
 
+// SetOpen overrides the access state to open for all participants.
+func (t *Thread) SetOpen() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.openAccess = true
+	t.allowedUsers = make(map[string]bool)
+}
+
 // AccessMode returns a human-readable description of the current access state.
 func (t *Thread) AccessMode() string {
 	t.mu.Lock()

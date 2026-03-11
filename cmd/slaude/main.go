@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
+	slackapi "github.com/slack-go/slack"
 
 	"github.com/sttts/slagent"
 	"github.com/sttts/slagent/channel"
@@ -47,6 +48,7 @@ type StartCmd struct {
 type JoinCmd struct {
 	URL                        string   `arg:"" help:"Slack thread URL to join."`
 	Topic                      []string `arg:"" optional:"" help:"Planning topic."`
+	Open                       bool     `help:"Start with thread open for all participants."`
 	Closed                     bool     `help:"Start locked to owner only, ignoring thread access state."`
 	Debug                      bool     `help:"Print raw JSON events from Claude to terminal."`
 	NoBye                      bool     `help:"Don't post a goodbye message to Slack on exit."`
@@ -195,10 +197,59 @@ func (cmd *JoinCmd) Run() error {
 		return err
 	}
 
+	// If neither --open nor --closed specified, read thread title and confirm access mode
+	if !cmd.Open && !cmd.Closed {
+		creds, err := credential.Load(cli.Workspace)
+		if err != nil {
+			return err
+		}
+		client := slackclient.New(creds.EffectiveToken(), creds.Cookie)
+		client.SetEnterprise(creds.Enterprise)
+
+		// Fetch thread parent to check access state
+		params := &slackapi.GetConversationRepliesParameters{
+			ChannelID: ch,
+			Timestamp: threadTS,
+			Limit:     1,
+		}
+		msgs, _, _, err := client.GetConversationReplies(params)
+		if err == nil && len(msgs) > 0 {
+			title := msgs[0].Text
+			isLocked := strings.Contains(title, "🔒") || strings.Contains(title, ":lock:")
+			var mode string
+			if isLocked {
+				mode = "locked"
+			} else {
+				mode = "open"
+			}
+
+			fmt.Printf("🔐 Thread is %s. Continue with %s? [Y/o/l] ", mode, mode)
+			reader := bufio.NewReader(os.Stdin)
+			line, _ := reader.ReadString('\n')
+			choice := strings.TrimSpace(strings.ToLower(line))
+			switch choice {
+			case "o", "open":
+				cmd.Open = true
+			case "l", "locked", "c", "closed":
+				cmd.Closed = true
+			case "", "y", "yes":
+				// Keep current state: if locked, set closed; if open, set open
+				if isLocked {
+					cmd.Closed = true
+				} else {
+					cmd.Open = true
+				}
+			default:
+				return fmt.Errorf("invalid choice: %q", choice)
+			}
+		}
+	}
+
 	cfg := session.Config{
 		Topic:                      strings.Join(cmd.Topic, " "),
 		Channel:                    ch,
 		ResumeThreadTS:             threadTS,
+		OpenAccess:                 cmd.Open,
 		ClosedAccess:               cmd.Closed,
 		Debug:                      cmd.Debug,
 		NoBye:                      cmd.NoBye,
