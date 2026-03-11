@@ -200,7 +200,10 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 				t.refreshTitle()
 			}
 			if !t.isAuthorized(msg.User) {
-				t.Post(t.emoji + " 🚫 Not authorized. Ask the thread owner to `/open`.")
+				// Only tell the user when they're addressing us directly
+				if targeted && targetID == t.instanceID {
+					t.Post(t.emoji + " 🚫 Not authorized. Ask the thread owner to `/open`.")
+				}
 				t.advanceLastTS(msg.Timestamp)
 				continue
 			}

@@ -658,7 +658,7 @@ func TestCommandFeedbackPostedToSlack(t *testing.T) {
 	}
 }
 
-func TestUnauthorizedMessageFeedback(t *testing.T) {
+func TestUnauthorizedBroadcastSilentlySkipped(t *testing.T) {
 	mock := newMockSlack()
 	defer mock.close()
 
@@ -668,24 +668,191 @@ func TestUnauthorizedMessageFeedback(t *testing.T) {
 	)
 	thread.Start("Test")
 
-	// Inject a message from unauthorized user
-	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OTHER", "hello")
+	// Broadcast from unauthorized user — silently skipped
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OTHER", "hello everyone")
 	replies, _ := thread.PollReplies()
 	if len(replies) != 0 {
-		t.Error("unauthorized message should not produce replies")
+		t.Error("unauthorized broadcast should not produce replies")
 	}
+	for _, m := range mock.activeMessages() {
+		if strings.Contains(m.Text, "Not authorized") {
+			t.Error("broadcast from unauthorized user should not trigger feedback")
+		}
+	}
+}
 
-	// Check feedback was posted
-	msgs := mock.activeMessages()
+func TestUnauthorizedTargetedGetsFeedback(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Targeted message from unauthorized user — gets feedback
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OTHER", ":fox_face:: help me")
+	replies, _ := thread.PollReplies()
+	if len(replies) != 0 {
+		t.Error("unauthorized targeted message should not produce replies")
+	}
 	var found bool
-	for _, m := range msgs {
+	for _, m := range mock.activeMessages() {
 		if strings.Contains(m.Text, "Not authorized") && m.ThreadTS == thread.ThreadTS() {
 			found = true
-			break
 		}
 	}
 	if !found {
-		t.Error("unauthorized feedback should be posted")
+		t.Error("targeted message from unauthorized user should trigger feedback")
+	}
+}
+
+func TestOpenForSpecificUser(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Owner opens for specific user via command
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OWNER", ":fox_face:: /open <@U_ALICE>")
+	thread.PollReplies()
+
+	// Verify Alice is now authorized
+	if !thread.isAuthorized("U_ALICE") {
+		t.Error("U_ALICE should be authorized after /open <@U_ALICE>")
+	}
+
+	// Other users still not authorized
+	if thread.isAuthorized("U_BOB") {
+		t.Error("U_BOB should not be authorized")
+	}
+
+	// Owner still authorized
+	if !thread.isAuthorized("U_OWNER") {
+		t.Error("owner should always be authorized")
+	}
+
+	// Alice can now send messages
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_ALICE", ":fox_face:: hello")
+	replies, _ := thread.PollReplies()
+	if len(replies) != 1 {
+		t.Fatalf("Alice's message should produce 1 reply, got %d", len(replies))
+	}
+	if !strings.Contains(replies[0].Text, "hello") {
+		t.Errorf("reply text = %q, want 'hello'", replies[0].Text)
+	}
+}
+
+func TestOpenForAllThenLock(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Open for everyone
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OWNER", ":fox_face:: /open")
+	thread.PollReplies()
+
+	if !thread.isAuthorized("U_ANYONE") {
+		t.Error("anyone should be authorized after /open")
+	}
+
+	// Lock again
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OWNER", ":fox_face:: /lock")
+	thread.PollReplies()
+
+	if thread.isAuthorized("U_ANYONE") {
+		t.Error("U_ANYONE should not be authorized after /lock")
+	}
+	if !thread.isAuthorized("U_OWNER") {
+		t.Error("owner should still be authorized after /lock")
+	}
+}
+
+func TestOpenWithDisplayNameSuffix(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Slack sometimes sends <@U_ALICE|alice> with display name
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OWNER", ":fox_face:: /open <@U_ALICE|alice>")
+	thread.PollReplies()
+
+	// Should still resolve to U_ALICE (not U_ALICE|alice)
+	if !thread.isAuthorized("U_ALICE") {
+		t.Error("U_ALICE should be authorized (display name suffix stripped)")
+	}
+}
+
+func TestLockBanUser(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Open for everyone first
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OWNER", ":fox_face:: /open")
+	thread.PollReplies()
+
+	// Ban specific user
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OWNER", ":fox_face:: /lock <@U_BAD>")
+	thread.PollReplies()
+
+	// Thread is still open (ban doesn't close)
+	if !thread.isAuthorized("U_GOOD") {
+		t.Error("unbanned user should still be authorized")
+	}
+	if thread.isAuthorized("U_BAD") {
+		t.Error("banned user should not be authorized")
+	}
+}
+
+func TestNonOwnerCannotRunAccessCommands(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	thread := NewThread(mock.client(), "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	thread.Start("Test")
+
+	// Non-owner tries /open
+	mock.injectReply("C_TEST", thread.ThreadTS(), "U_OTHER", ":fox_face:: /open")
+	thread.PollReplies()
+
+	// Should still be locked
+	if thread.isAuthorized("U_OTHER") {
+		t.Error("non-owner /open should not change access")
+	}
+
+	// Feedback should mention owner
+	var found bool
+	for _, m := range mock.activeMessages() {
+		if strings.Contains(m.Text, "owner") && m.ThreadTS == thread.ThreadTS() {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("non-owner /open should get owner feedback")
 	}
 }
 
