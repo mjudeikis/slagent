@@ -163,6 +163,21 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 				continue
 			}
 
+			// /sandbox — interactive toggle, returns Reply with Sandbox field
+			if strings.HasPrefix(rest, "/sandbox") {
+				if msg.User != t.ownerID {
+					t.PostEphemeral(msg.User, t.emoji+" 🚫 Only the thread owner can change sandbox settings.")
+					t.advanceLastTS(msg.Timestamp)
+					continue
+				}
+				if result, ok := t.handleSandboxCommand(); ok {
+					user := t.resolveUser(msg.User)
+					replies = append(replies, Reply{User: user, UserID: msg.User, Sandbox: result})
+				}
+				t.advanceLastTS(msg.Timestamp)
+				continue
+			}
+
 			// Handle slaude commands (/open, /lock, /close)
 			handled, feedback := t.handleCommand(msg.User, rest)
 			if feedback != "" {

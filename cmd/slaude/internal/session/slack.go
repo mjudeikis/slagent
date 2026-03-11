@@ -11,6 +11,7 @@ import (
 
 	"github.com/sttts/slagent"
 	slackclient "github.com/sttts/slagent/client"
+	"github.com/sttts/slagent/cmd/slaude/internal/claude"
 	"github.com/sttts/slagent/credential"
 )
 
@@ -197,6 +198,38 @@ func (s *Session) startThread() error {
 	return nil
 }
 
+// handleSandboxToggle stops Claude, updates sandbox settings, and restarts with --resume.
+func (s *Session) handleSandboxToggle(enable bool) {
+	sessionID := s.proc.SessionID()
+	if sessionID == "" {
+		s.ui.Error("cannot toggle sandbox: no session ID")
+		return
+	}
+
+	status := "disabled"
+	if enable {
+		status = "enabled"
+	}
+	s.ui.Info(fmt.Sprintf("🔒 Sandbox: %s — restarting session...", status))
+
+	// Stop current Claude process
+	s.proc.Stop()
+
+	// Restart with --resume and new sandbox settings
+	sandboxJSON := fmt.Sprintf(`{"sandbox":{"enabled":%t}}`, enable)
+	extraArgs := []string{"--resume", sessionID, "--settings", sandboxJSON}
+
+	var claudeOpts []claude.Option
+	claudeOpts = append(claudeOpts, claude.WithExtraArgs(extraArgs))
+	proc, err := claude.Start(s.ctx, claudeOpts...)
+	if err != nil {
+		s.ui.Error(fmt.Sprintf("failed to restart Claude: %v", err))
+		return
+	}
+	s.proc = proc
+	s.ui.Info(fmt.Sprintf("🔒 Sandbox %s — session resumed", status))
+}
+
 // feedbackLoop polls Slack for replies and feeds them to Claude until the session ends.
 func (s *Session) feedbackLoop(ctx context.Context) {
 	for {
@@ -206,13 +239,21 @@ func (s *Session) feedbackLoop(ctx context.Context) {
 			return
 		}
 
+		// Handle sandbox toggle requests (stop + restart with new settings)
+		for _, r := range replies {
+			if r.Sandbox != nil {
+				s.handleSandboxToggle(*r.Sandbox)
+				// After restart, the feedback loop continues with the new session
+			}
+		}
+
 		// Separate commands from regular feedback
 		var commands []slagent.Reply
 		var feedback []slagent.Reply
 		for _, r := range replies {
 			if r.Command != "" {
 				commands = append(commands, r)
-			} else {
+			} else if r.Sandbox == nil {
 				feedback = append(feedback, r)
 			}
 		}
