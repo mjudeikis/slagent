@@ -1161,7 +1161,10 @@ func (t *Thread) helpText() string {
 		"  `:%s:: /lock @user` — ban specific users\n"+
 		"  `:%s:: /close` — alias for /lock\n"+
 		"\n"+
-		"*Other*\n"+
+		"*Session* (owner only)\n"+
+		"  `:%s:: /sandbox` — toggle sandbox on/off (restarts session)\n"+
+		"\n"+
+		"*Control*\n"+
 		"  `stop` — interrupt current turn (all instances, anyone)\n"+
 		"  `:%s:: stop` — interrupt this instance only\n"+
 		"  `quit` — terminate session (owner only)\n"+
@@ -1169,7 +1172,7 @@ func (t *Thread) helpText() string {
 		"  `:%s:: /help` — show this help\n"+
 		"  Other `/commands` are forwarded to Claude.",
 		id, emoji,
-		id, id, id, id, id, id, id, id, id, id)
+		id, id, id, id, id, id, id, id, id, id, id)
 }
 
 // parseMention extracts a user ID from a Slack mention ("<@U123>").
