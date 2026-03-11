@@ -48,6 +48,7 @@ type threadConfig struct {
 	apiURL            string     // base URL for native streaming API calls (testing)
 	slackLog          io.Writer  // if non-nil, log all Slack API calls here
 	thinkingEmoji     string     // Slack shortcode for thinking indicator (e.g. ":claude:")
+	quoteMessages     bool       // blockquote bot messages in Slack
 }
 
 // identityEmojis maps Slack short codes to emoji for identity selection.
@@ -157,6 +158,11 @@ func WithOpenAccess() ThreadOption {
 // learning, but the agent only responds to authorized users.
 func WithObserve() ThreadOption {
 	return func(c *threadConfig) { c.observe = true }
+}
+
+// WithQuoteMessages enables blockquote formatting for bot messages in Slack.
+func WithQuoteMessages() ThreadOption {
+	return func(c *threadConfig) { c.quoteMessages = true }
 }
 
 // WithPollInterval sets the polling interval for new replies.

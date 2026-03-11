@@ -97,6 +97,9 @@ func (s *Session) connectSlack() error {
 	if s.cfg.Observe {
 		opts = append(opts, slagent.WithObserve())
 	}
+	if s.cfg.QuoteMessages {
+		opts = append(opts, slagent.WithQuoteMessages())
+	}
 
 	// Log Slack API calls in debug mode
 	if s.cfg.Debug {
@@ -189,7 +192,6 @@ func (s *Session) buildExtraArgs() []string {
 				"- Only respond to messages directed to you or broadcast. Never greet or say hello.\n"+
 				"- Be concise. Slack readers prefer short, focused responses.\n"+
 				"- When outputting tabular data with columns, always wrap it in a code block (```) so it renders with fixed-width alignment in Slack."+
-<<<<<<< HEAD
 				"%s%s",
 			emoji, instanceID, emoji, instanceID, instanceID, instanceID, instanceID, instanceID, ownerCtx, observeCtx)
 		// Combine soul content + slack context into --system-prompt

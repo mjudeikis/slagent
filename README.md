@@ -127,6 +127,14 @@ When no flag is given:
 
 Each instance manages its own access independently. Joined/resumed instances don't persist access changes to the shared thread title — their `/open` and `/lock` commands only affect in-memory state.
 
+### Experimental: Blockquote Bot Messages
+
+`--experimental-quote` wraps bot messages in Slack blockquotes (`>`) so they visually stand out from human messages in the thread:
+
+```bash
+slaude start --experimental-quote -c CHANNEL -- "design the API"
+```
+
 Thread title reflects access state:
 - `🔒🧵 Topic` — locked (owner only)
 - `👀🧵 Topic` — observe (locked + reading all messages)
