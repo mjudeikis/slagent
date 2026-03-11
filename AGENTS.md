@@ -131,10 +131,15 @@ Implementation:
 - `mistargeted()` detects wrong syntax (Unicode emoji or single colon) and posts a hint.
 
 ## Thread Access Control
-See README.md for commands and title format.
+See README.md for commands, title format, and observe mode.
 
 Implementation:
-- `handleCommand()` in `thread.go` processes `/open`, `/lock`, `/close`.
+- `handleCommand()` in `thread.go` processes `/open`, `/lock`, `/close`, `/observe`.
+- Two-tier authorization: `isAuthorized()` (who agent responds to) and `isVisible()` (who agent sees).
 - `isAuthorized()` checks banned → openAccess → owner → allowedUsers.
-- `formatTitle()` / `parseTitle()` encode/decode access state in thread parent.
+- `isVisible()` returns true if openAccess OR observe OR isAuthorized().
+- `formatTitle()` / `parseTitle()` encode/decode access state including 👀 observe marker.
+- 👀 replaces 🔒 in title (not stacks): `👀🧵` = observe, `🔒🧵` = locked.
+- `Reply.Observe` field marks messages from non-authorized users in observe mode.
 - Title parsed on `Resume()` to recover state. Other slaude instances subject to same rules.
+- CLI flags `--locked`/`--observe`/`--open` (mutually exclusive), PTY-aware interactive prompt.

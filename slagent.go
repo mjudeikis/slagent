@@ -31,6 +31,7 @@ type Reply struct {
 	Stop    bool   // If set, interrupt the current Claude turn
 	Quit    bool   // If set, terminate the session (owner only)
 	Sandbox *bool  // If non-nil, request sandbox toggle (true=enable, false=disable)
+	Observe bool   // If set, message is observe-only (user not authorized to get responses)
 }
 
 // ThreadOption configures a Thread.
@@ -40,6 +41,7 @@ type threadConfig struct {
 	ownerID           string
 	instanceID        string
 	openAccess        bool
+	observe           bool
 	pollInterval      time.Duration
 	bufferSize        int
 	markdownConverter func(string) string
@@ -117,6 +119,7 @@ func InstanceEmoji(instanceID string) string {
 // ShortcodesToUnicode converts Slack shortcodes to Unicode emoji.
 // Handles :lock:, :thread:, and all identity emoji shortcodes.
 func ShortcodesToUnicode(text string) string {
+	text = strings.ReplaceAll(text, ":eyes:", "👀")
 	text = strings.ReplaceAll(text, ":lock:", "🔒")
 	text = strings.ReplaceAll(text, ":thread:", "🧵")
 	for shortcode, emoji := range identityEmojis {
@@ -148,6 +151,12 @@ func WithOwner(userID string) ThreadOption {
 // WithOpenAccess allows all thread participants to send input.
 func WithOpenAccess() ThreadOption {
 	return func(c *threadConfig) { c.openAccess = true }
+}
+
+// WithObserve enables observe mode: all messages are delivered for passive
+// learning, but the agent only responds to authorized users.
+func WithObserve() ThreadOption {
+	return func(c *threadConfig) { c.observe = true }
 }
 
 // WithPollInterval sets the polling interval for new replies.

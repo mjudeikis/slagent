@@ -535,6 +535,289 @@ func TestModeSuffixWithBansRoundtrip(t *testing.T) {
 	}
 }
 
+func TestObserveFormatTitle(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	tests := []struct {
+		name  string
+		setup func(*Thread)
+		want  string
+	}{
+		{
+			name: "observe closed (no allowed users)",
+			setup: func(th *Thread) {
+				th.handleCommand("U_OWNER", "/observe")
+			},
+			want: ":fox_face:👀🧵 Test Topic",
+		},
+		{
+			name: "observe with allowed users",
+			setup: func(th *Thread) {
+				th.handleCommand("U_OWNER", "/open <@U_ALICE>")
+				th.observe = true
+			},
+			want: ":fox_face:👀🧵 <@U_ALICE> Test Topic",
+		},
+		{
+			name: "observe off after toggle",
+			setup: func(th *Thread) {
+				th.handleCommand("U_OWNER", "/observe") // on
+				th.handleCommand("U_OWNER", "/observe") // off
+			},
+			want: ":fox_face:🔒🧵 Test Topic",
+		},
+		{
+			name: "open mode ignores observe",
+			setup: func(th *Thread) {
+				th.handleCommand("U_OWNER", "/open")
+			},
+			want: ":fox_face:🧵 Test Topic",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			th := NewThread(mock.client(), "C_TEST",
+				WithOwner("U_OWNER"),
+				WithInstanceID("fox_face"),
+			)
+			th.topic = "Test Topic"
+			tt.setup(th)
+			got := th.formatTitle()
+			if got != tt.want {
+				t.Errorf("formatTitle() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestObserveParseTitle(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	tests := []struct {
+		name        string
+		text        string
+		wantObserve bool
+		wantOpen    bool
+		wantTopic   string
+		wantAllowed []string
+	}{
+		{
+			name:        "observe closed",
+			text:        ":fox_face:👀🧵 My Topic",
+			wantObserve: true,
+			wantOpen:    false,
+			wantTopic:   "My Topic",
+		},
+		{
+			name:        "observe with allowed users",
+			text:        ":fox_face:👀🧵 <@U_ALICE> My Topic",
+			wantObserve: true,
+			wantOpen:    false,
+			wantTopic:   "My Topic",
+			wantAllowed: []string{"U_ALICE"},
+		},
+		{
+			name:        "observe shortcodes",
+			text:        ":fox_face::eyes::thread: My Topic",
+			wantObserve: true,
+			wantOpen:    false,
+			wantTopic:   "My Topic",
+		},
+		{
+			name:        "locked (no observe)",
+			text:        ":fox_face:🔒🧵 My Topic",
+			wantObserve: false,
+			wantOpen:    false,
+			wantTopic:   "My Topic",
+		},
+		{
+			name:        "open (no observe)",
+			text:        ":fox_face:🧵 My Topic",
+			wantObserve: false,
+			wantOpen:    true,
+			wantTopic:   "My Topic",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			th := NewThread(mock.client(), "C_TEST", WithInstanceID("fox_face"))
+			th.parseTitle(tt.text)
+			if th.observe != tt.wantObserve {
+				t.Errorf("observe = %v, want %v", th.observe, tt.wantObserve)
+			}
+			if th.openAccess != tt.wantOpen {
+				t.Errorf("openAccess = %v, want %v", th.openAccess, tt.wantOpen)
+			}
+			if th.topic != tt.wantTopic {
+				t.Errorf("topic = %q, want %q", th.topic, tt.wantTopic)
+			}
+			for _, uid := range tt.wantAllowed {
+				if !th.allowedUsers[uid] {
+					t.Errorf("allowedUsers missing %s", uid)
+				}
+			}
+		})
+	}
+}
+
+func TestObserveRoundtrip(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	// Observe + closed
+	th := NewThread(mock.client(), "C_TEST",
+		WithOwner("U_OWNER"),
+		WithInstanceID("fox_face"),
+	)
+	th.topic = "Watch this"
+	th.handleCommand("U_OWNER", "/observe")
+
+	label := th.formatTitle()
+
+	th2 := NewThread(mock.client(), "C_TEST", WithInstanceID("fox_face"))
+	th2.parseTitle(label)
+
+	if th2.topic != "Watch this" {
+		t.Errorf("roundtrip topic = %q, want %q", th2.topic, "Watch this")
+	}
+	if !th2.observe {
+		t.Error("roundtrip observe should be true")
+	}
+	if th2.openAccess {
+		t.Error("roundtrip openAccess should be false")
+	}
+}
+
+func TestObserveIsVisible(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	th := NewThread(mock.client(), "C_TEST",
+		WithOwner("U_OWNER"),
+		WithObserve(),
+	)
+
+	// Owner is both authorized and visible
+	if !th.isAuthorized("U_OWNER") {
+		t.Error("owner should be authorized")
+	}
+	if !th.isVisible("U_OWNER") {
+		t.Error("owner should be visible")
+	}
+
+	// Other user is not authorized but IS visible in observe mode
+	if th.isAuthorized("U_OTHER") {
+		t.Error("other user should not be authorized in observe mode")
+	}
+	if !th.isVisible("U_OTHER") {
+		t.Error("other user should be visible in observe mode")
+	}
+
+	// Turn off observe
+	th.SetObserve(false)
+	if th.isVisible("U_OTHER") {
+		t.Error("other user should not be visible when observe is off")
+	}
+}
+
+func TestObserveAccessMode(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	th := NewThread(mock.client(), "C_TEST", WithOwner("U_OWNER"))
+
+	if th.AccessMode() != "locked" {
+		t.Errorf("default should be locked, got %q", th.AccessMode())
+	}
+
+	th.SetObserve(true)
+	if th.AccessMode() != "observe+locked" {
+		t.Errorf("observe+locked should be observe+locked, got %q", th.AccessMode())
+	}
+
+	th.SetOpen()
+	if th.AccessMode() != "open" {
+		t.Errorf("open should be open, got %q", th.AccessMode())
+	}
+}
+
+func TestObserveCommand(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	th := NewThread(mock.client(), "C_TEST", WithOwner("U_OWNER"))
+
+	// /observe toggles on
+	handled, feedback := th.handleCommand("U_OWNER", "/observe")
+	if !handled {
+		t.Error("/observe should be handled")
+	}
+	if !strings.Contains(feedback, "on") {
+		t.Errorf("expected 'on' in feedback, got %q", feedback)
+	}
+	if !th.observe {
+		t.Error("observe should be true")
+	}
+	if th.openAccess {
+		t.Error("openAccess should be false after /observe")
+	}
+
+	// /observe toggles off
+	handled, feedback = th.handleCommand("U_OWNER", "/observe")
+	if !handled {
+		t.Error("/observe should be handled")
+	}
+	if !strings.Contains(feedback, "off") {
+		t.Errorf("expected 'off' in feedback, got %q", feedback)
+	}
+	if th.observe {
+		t.Error("observe should be false after second /observe")
+	}
+
+	// Non-owner can't use /observe
+	th.handleCommand("U_OWNER", "/observe") // turn on
+	_, feedback = th.handleCommand("U_OTHER", "/observe")
+	if !strings.Contains(feedback, "🚫") {
+		t.Errorf("non-owner should get denied, got %q", feedback)
+	}
+}
+
+func TestLockDisablesObserve(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	th := NewThread(mock.client(), "C_TEST", WithOwner("U_OWNER"))
+	th.handleCommand("U_OWNER", "/observe")
+	if !th.observe {
+		t.Error("observe should be on")
+	}
+
+	// /lock disables observe
+	th.handleCommand("U_OWNER", "/lock")
+	if th.observe {
+		t.Error("observe should be off after /lock")
+	}
+}
+
+func TestOpenDisablesObserve(t *testing.T) {
+	mock := newMockSlack()
+	defer mock.close()
+
+	th := NewThread(mock.client(), "C_TEST", WithOwner("U_OWNER"))
+	th.handleCommand("U_OWNER", "/observe")
+	if !th.observe {
+		t.Error("observe should be on")
+	}
+
+	// /open disables observe
+	th.handleCommand("U_OWNER", "/open")
+	if th.observe {
+		t.Error("observe should be off after /open")
+	}
+}
+
 func TestThreadTitleUpdatedOnAccessChange(t *testing.T) {
 	mock := newMockSlack()
 	defer mock.close()

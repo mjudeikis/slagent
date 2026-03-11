@@ -88,35 +88,51 @@ Regular messages with `:shortcode::` are delivered to all instances, but the sys
 
 ### Thread Access Control
 
-Threads are locked to the owner by default. Use `/open` and `/lock` to control access (via `:shortcode::` targeting):
+Access has two independent axes:
+
+**Base mode** — who the agent responds to:
+- **Locked** (default for `start`): owner only
+- **Selective**: owner + listed users
+- **Open**: everyone
+
+**Observe flag** — who the agent sees:
+- **Off** (default): non-authorized messages filtered out
+- **On**: all messages delivered for passive learning, agent still only responds to authorized users
+
+Use `/open`, `/lock`, and `/observe` to control access (via `:shortcode::` targeting):
 
 | Command | Effect |
 |---------|--------|
 | `:fox_face:: /open` | Open thread for everyone |
 | `:fox_face:: /open <@U1> <@U2>` | Allow specific users (additive) |
-| `:fox_face:: /lock` | Lock to owner only (resets all) |
+| `:fox_face:: /lock` | Lock to owner only (resets all, disables observe) |
 | `:fox_face:: /lock <@U1>` | Ban specific users |
 | `:fox_face:: /close` | Alias for `/lock` |
+| `:fox_face:: /observe` | Toggle observe mode (locked + read all messages) |
 
-Start a thread open for all with `--open`:
-
-```bash
-slaude start --open -c CHANNEL -- "design the API"
-```
-
-Join or resume with `--closed` to ignore the thread's inherited access state and start locked:
+Three mutually exclusive CLI flags control the initial access mode:
 
 ```bash
-slaude join --closed https://team.slack.com/archives/C123/p1234567890 "review"
-slaude resume --closed https://team.slack.com/archives/C123/p1234567890#fox@ts -- --resume ID
+slaude start --locked -c CHANNEL -- "design the API"   # locked (default for start)
+slaude start --observe -c CHANNEL -- "watch and learn"  # observe: read all, respond to owner
+slaude start --open -c CHANNEL -- "design the API"      # open for everyone
+
+slaude join --observe URL "help with tests"             # observe (default for join)
+slaude join --locked URL "review"                       # locked to owner only
 ```
+
+When no flag is given:
+- **Interactive** (terminal): prompts `Closed, oBserve, or open? [cBo]`
+- **Non-interactive** (piped): `start` defaults to locked, `join`/`resume` default to observe
 
 Each instance manages its own access independently. Joined/resumed instances don't persist access changes to the shared thread title — their `/open` and `/lock` commands only affect in-memory state.
 
 Thread title reflects access state:
 - `🔒🧵 Topic` — locked (owner only)
+- `👀🧵 Topic` — observe (locked + reading all messages)
 - `🧵 Topic` — open for all
-- `🧵 @user1 @user2 Topic` — open for specific users
+- `🧵 @user1 @user2 Topic` — selective (specific users)
+- `👀🧵 @user1 @user2 Topic` — selective + observe
 - `🧵 Topic (🔒 @user)` — with banned users
 
 ### Permission Auto-Approve

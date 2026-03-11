@@ -25,6 +25,7 @@ type Config struct {
 	InstanceID     string   // slagent instance ID (for resume; empty = generate new)
 	OpenAccess     bool     // start with thread open for all participants
 	ClosedAccess   bool     // override inherited access to locked (join/resume)
+	Observe        bool     // observe mode: read all messages, respond only to authorized
 	Debug          bool     // write raw JSON events to debug.log
 	NoBye          bool     // don't post goodbye message on exit
 	Workspace      string   // Slack workspace (empty = default)
@@ -108,7 +109,7 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 		replyNotify: make(chan struct{}, 1),
 		stopNotify:  make(chan struct{}, 1),
 		knownHosts:      loadKnownHosts(),
-		silentTurnsLeft: 3,
+		silentTurnsLeft: 0,
 	}
 
 	// Open debug log
@@ -186,8 +187,11 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	defer proc.Stop()
 
 	// Resume or start Slack thread
+	var threadHistory string
 	if sess.thread != nil {
-		if err := sess.startThread(); err != nil {
+		var err error
+		threadHistory, err = sess.startThread()
+		if err != nil {
 			return nil, err
 		}
 		// Register session state so 'slaude ps' and 'slaude kill' can find it.
@@ -209,6 +213,18 @@ func Run(ctx context.Context, cfg Config) (*ResumeInfo, error) {
 	defer ui.ShowCursor()
 
 	sess.banner()
+
+	// Inject thread history on fresh join so the agent absorbs context
+	if threadHistory != "" {
+		msg := "[Thread history — absorb for context, do NOT respond]\n" + threadHistory
+		sess.ui.Info(fmt.Sprintf("📜 Injecting %d bytes of thread history", len(threadHistory)))
+		if err := sess.proc.Send(msg); err != nil {
+			return nil, fmt.Errorf("inject history: %w", err)
+		}
+		if err := sess.readTurn(); err != nil {
+			return nil, fmt.Errorf("reading history absorption: %w", err)
+		}
+	}
 
 	// Send initial topic (skip on resume or if no topic given)
 	if err := sess.initialTurn(); err != nil {

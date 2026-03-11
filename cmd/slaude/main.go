@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
-	slackapi "github.com/slack-go/slack"
+	"github.com/mattn/go-isatty"
 
 	"github.com/sttts/slagent"
 	"github.com/sttts/slagent/channel"
@@ -37,7 +37,9 @@ var cli struct {
 type StartCmd struct {
 	Channel                    string   `short:"c" help:"Slack channel name or ID." placeholder:"CHANNEL"`
 	User                       []string `short:"u" help:"Slack user(s) for DM. Use multiple -u for group DM." placeholder:"USER"`
-	Open                       bool     `help:"Start with thread open for all participants (default: locked to owner)."`
+	Locked                     bool     `help:"Lock thread to owner only (default for start)."`
+	Observe                    bool     `help:"Observe mode: read all messages, respond only to owner."`
+	Open                       bool     `help:"Open thread for all participants."`
 	Topic                      []string `arg:"" optional:"" help:"Planning topic."`
 	Debug                      bool     `help:"Print raw JSON events from Claude to terminal."`
 	NoBye                      bool     `help:"Don't post a goodbye message to Slack on exit."`
@@ -50,8 +52,9 @@ type StartCmd struct {
 type JoinCmd struct {
 	URL                        string   `arg:"" help:"Slack thread URL to join."`
 	Topic                      []string `arg:"" optional:"" help:"Planning topic."`
-	Open                       bool     `help:"Start with thread open for all participants."`
-	Closed                     bool     `help:"Start locked to owner only, ignoring thread access state."`
+	Locked                     bool     `help:"Lock thread to owner only."`
+	Observe                    bool     `help:"Observe mode: read all messages, respond only to owner (default for join)."`
+	Open                       bool     `help:"Open thread for all participants."`
 	Debug                      bool     `help:"Print raw JSON events from Claude to terminal."`
 	NoBye                      bool     `help:"Don't post a goodbye message to Slack on exit."`
 	DangerousAutoApprove        string   `help:"Auto-approve sandbox risk level: never|green|yellow (default: never)." default:"never" enum:"never,green,yellow"`
@@ -62,7 +65,9 @@ type JoinCmd struct {
 // ResumeCmd resumes an existing session in a Slack thread.
 type ResumeCmd struct {
 	URL                        string   `arg:"" help:"Slack thread URL with #instanceID fragment."`
-	Closed                     bool     `help:"Start locked to owner only, ignoring thread access state."`
+	Locked                     bool     `help:"Lock thread to owner only."`
+	Observe                    bool     `help:"Observe mode: read all messages, respond only to owner."`
+	Open                       bool     `help:"Open thread for all participants."`
 	Debug                      bool     `help:"Print raw JSON events from Claude to terminal."`
 	NoBye                      bool     `help:"Don't post a goodbye message to Slack on exit."`
 	DangerousAutoApprove        string   `help:"Auto-approve sandbox risk level: never|green|yellow (default: never)." default:"never" enum:"never,green,yellow"`
@@ -118,7 +123,6 @@ func (cmd *StartCmd) Run() error {
 	cfg := session.Config{
 		Topic:                      strings.Join(cmd.Topic, " "),
 		Channel:                    cmd.Channel,
-		OpenAccess:                 cmd.Open,
 		Debug:                      cmd.Debug,
 		NoBye:                      cmd.NoBye,
 		Workspace:                  cli.Workspace,
@@ -186,6 +190,14 @@ func (cmd *StartCmd) Run() error {
 		cfg.Topic = strings.TrimSpace(line)
 	}
 
+	// Resolve access mode last: channel → topic → mode
+	if err := resolveAccessMode(&cmd.Locked, &cmd.Observe, &cmd.Open, "start"); err != nil {
+		return err
+	}
+	cfg.OpenAccess = cmd.Open
+	cfg.ClosedAccess = cmd.Locked
+	cfg.Observe = cmd.Observe
+
 	return runSession(cfg)
 }
 
@@ -199,52 +211,9 @@ func (cmd *JoinCmd) Run() error {
 		return err
 	}
 
-	// If neither --open nor --closed specified, read thread title and confirm access mode
-	if !cmd.Open && !cmd.Closed {
-		creds, err := credential.Load(cli.Workspace)
-		if err != nil {
-			return err
-		}
-		client := slackclient.New(creds.EffectiveToken(), creds.Cookie)
-		client.SetEnterprise(creds.Enterprise)
-
-		// Fetch thread parent to check access state
-		params := &slackapi.GetConversationRepliesParameters{
-			ChannelID: ch,
-			Timestamp: threadTS,
-			Limit:     1,
-		}
-		msgs, _, _, err := client.GetConversationReplies(params)
-		if err == nil && len(msgs) > 0 {
-			title := msgs[0].Text
-			isLocked := strings.Contains(title, "🔒") || strings.Contains(title, ":lock:")
-			var mode string
-			if isLocked {
-				mode = "locked"
-			} else {
-				mode = "open"
-			}
-
-			fmt.Printf("🔐 Thread is %s. Continue with %s? [Y/o/l] ", mode, mode)
-			reader := bufio.NewReader(os.Stdin)
-			line, _ := reader.ReadString('\n')
-			choice := strings.TrimSpace(strings.ToLower(line))
-			switch choice {
-			case "o", "open":
-				cmd.Open = true
-			case "l", "locked", "c", "closed":
-				cmd.Closed = true
-			case "", "y", "yes":
-				// Keep current state: if locked, set closed; if open, set open
-				if isLocked {
-					cmd.Closed = true
-				} else {
-					cmd.Open = true
-				}
-			default:
-				return fmt.Errorf("invalid choice: %q", choice)
-			}
-		}
+	// Resolve access mode: --locked/--observe/--open, or prompt/default
+	if err := resolveAccessMode(&cmd.Locked, &cmd.Observe, &cmd.Open, "join"); err != nil {
+		return err
 	}
 
 	cfg := session.Config{
@@ -252,7 +221,8 @@ func (cmd *JoinCmd) Run() error {
 		Channel:                    ch,
 		ResumeThreadTS:             threadTS,
 		OpenAccess:                 cmd.Open,
-		ClosedAccess:               cmd.Closed,
+		ClosedAccess:               cmd.Locked,
+		Observe:                    cmd.Observe,
 		Debug:                      cmd.Debug,
 		NoBye:                      cmd.NoBye,
 		Workspace:                  cli.Workspace,
@@ -278,12 +248,19 @@ func (cmd *ResumeCmd) Run() error {
 		return err
 	}
 
+	// Resolve access mode: --locked/--observe/--open, or prompt/default
+	if err := resolveAccessMode(&cmd.Locked, &cmd.Observe, &cmd.Open, "resume"); err != nil {
+		return err
+	}
+
 	cfg := session.Config{
 		Channel:                    ch,
 		ResumeThreadTS:             threadTS,
 		ResumeAfterTS:              afterTS,
 		InstanceID:                 instanceID,
-		ClosedAccess:               cmd.Closed,
+		OpenAccess:                 cmd.Open,
+		ClosedAccess:               cmd.Locked,
+		Observe:                    cmd.Observe,
 		Debug:                      cmd.Debug,
 		NoBye:                      cmd.NoBye,
 		Workspace:                  cli.Workspace,
@@ -293,6 +270,75 @@ func (cmd *ResumeCmd) Run() error {
 	}
 
 	return runSession(cfg)
+}
+
+// resolveAccessMode resolves the access mode from CLI flags, interactive prompt, or defaults.
+// Exactly one of locked/observe/open will be true on return.
+func resolveAccessMode(locked, observe, open *bool, command string) error {
+	// Count how many flags are set
+	n := 0
+	if *locked {
+		n++
+	}
+	if *observe {
+		n++
+	}
+	if *open {
+		n++
+	}
+	if n > 1 {
+		return fmt.Errorf("--locked, --observe, and --open are mutually exclusive")
+	}
+	if n == 1 {
+		return nil
+	}
+
+	// No flag given — prompt if interactive, otherwise use defaults
+	if isatty.IsTerminal(os.Stdin.Fd()) {
+		// Show prompt with default highlighted per command
+		var prompt string
+		switch command {
+		case "start":
+			prompt = "🔐 Closed, observe, or open? [Cbo] "
+		default:
+			prompt = "🔐 closed, oBserve, or open? [cBo] "
+		}
+		fmt.Print(prompt)
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		switch strings.TrimSpace(strings.ToLower(line)) {
+		case "c", "closed", "locked":
+			*locked = true
+		case "b", "observe":
+			*observe = true
+		case "o", "open":
+			*open = true
+		case "":
+			// Default per command
+			switch command {
+			case "start":
+				*locked = true
+			case "join":
+				*observe = true
+			case "resume":
+				*observe = true
+			}
+		default:
+			return fmt.Errorf("invalid choice")
+		}
+	} else {
+		// Non-interactive defaults
+		switch command {
+		case "start":
+			*locked = true
+		case "join":
+			*observe = true
+		case "resume":
+			// Resume reads from thread title; default to observe if no owner match
+			*observe = true
+		}
+	}
+	return nil
 }
 
 // runSession runs a session with the given config and prints resume info on exit.
@@ -306,6 +352,13 @@ func runSession(cfg session.Config) error {
 	if resume != nil && resume.SessionID != "" {
 		// Build flags to carry over (only non-default values)
 		var flags string
+		if cfg.Observe {
+			flags += " --observe"
+		} else if cfg.OpenAccess {
+			flags += " --open"
+		} else {
+			flags += " --locked"
+		}
 		if cfg.Debug {
 			flags += " --debug"
 		}

@@ -123,6 +123,7 @@ type Thread struct {
 	// Permissions
 	ownerID      string
 	openAccess   bool
+	observe      bool            // deliver all messages, but only respond to authorized users
 	allowedUsers map[string]bool // specific users allowed when not fully open
 	bannedUsers  map[string]bool // explicitly banned users (override openAccess)
 	topic      string // parsed topic text (without emojis/mentions)
@@ -160,6 +161,7 @@ func NewThread(c *client.Client, channel string, opts ...ThreadOption) *Thread {
 		config:       cfg,
 		ownerID:      cfg.ownerID,
 		openAccess:   cfg.openAccess,
+		observe:      cfg.observe,
 		allowedUsers: make(map[string]bool),
 		bannedUsers:  make(map[string]bool),
 		userCache:    make(map[string]string),
@@ -207,8 +209,9 @@ func (t *Thread) Start(title string) (string, error) {
 
 // Resume attaches to an existing thread and recovers access state from the title.
 // If afterTS is provided, it is used as the cursor position (skipping all messages
-// up to that point). Otherwise, the latest reply is fetched from Slack.
-func (t *Thread) Resume(threadTS string, afterTS ...string) {
+// up to that point). Otherwise, all replies are fetched and returned for history
+// injection (fresh join). Returns the fetched messages (excluding the parent).
+func (t *Thread) Resume(threadTS string, afterTS ...string) []slackapi.Message {
 	t.mu.Lock()
 	t.threadTS = threadTS
 	t.lastTS = threadTS
@@ -229,7 +232,7 @@ func (t *Thread) Resume(threadTS string, afterTS ...string) {
 		t.mu.Lock()
 		t.lastTS = afterTS[0]
 		t.mu.Unlock()
-		return
+		return nil
 	}
 
 	// No cursor — fetch replies and advance to the latest
@@ -239,7 +242,7 @@ func (t *Thread) Resume(threadTS string, afterTS ...string) {
 	}
 	msgs, _, _, err := t.client.GetConversationReplies(params)
 	if err != nil || len(msgs) == 0 {
-		return
+		return nil
 	}
 	t.parseTitle(msgs[0].Text)
 
@@ -249,6 +252,51 @@ func (t *Thread) Resume(threadTS string, afterTS ...string) {
 		t.lastTS = latest
 		t.mu.Unlock()
 	}
+
+	// Return replies (skip parent message)
+	if len(msgs) > 1 {
+		return msgs[1:]
+	}
+	return nil
+}
+
+// FormatHistory formats thread messages into a text block for Claude to absorb.
+// Messages from slagent instances are identified by block_id and shown with their
+// emoji prefix. Human messages show the resolved user name.
+func (t *Thread) FormatHistory(msgs []slackapi.Message) string {
+	if len(msgs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	for _, msg := range msgs {
+		// Skip activity and streaming messages
+		kind, _ := classifyBlocks(msg.Blocks)
+		if kind == blockActivity || kind == blockStreaming {
+			continue
+		}
+
+		// Slagent messages: use the text as-is (already has emoji prefix)
+		if kind == blockFinal {
+			sb.WriteString(msg.Text)
+			sb.WriteByte('\n')
+			continue
+		}
+
+		// Skip bot messages
+		if msg.BotID != "" {
+			continue
+		}
+
+		// Human message
+		user := t.resolveUser(msg.User)
+		sb.WriteString("@")
+		sb.WriteString(user)
+		sb.WriteString(": ")
+		sb.WriteString(msg.Text)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
 }
 
 // NewTurn begins a new response turn.
@@ -616,11 +664,12 @@ func (t *Thread) resolveUser(userID string) string {
 
 // formatTitle builds the thread parent label reflecting access state.
 //
-//	Locked (owner only):       ":instanceID:🔒🧵 Topic"
-//	Open for all:              ":instanceID:🧵 Topic"
-//	Selective (allowed users): ":instanceID:🧵 <@U1> <@U2> Topic"
-//	With bans (appended):      "... (🔒 <@U3>)"
-// formatTitle builds the thread parent label reflecting access state.
+//	Open for all:                  ":instanceID:🧵 Topic"
+//	Selective (allowed users):     ":instanceID:🧵 <@U1> <@U2> Topic"
+//	Selective + observe:           ":instanceID:👀🧵 <@U1> <@U2> Topic"
+//	Locked (owner only):           ":instanceID:🔒🧵 Topic"
+//	Locked + observe (= observe):  ":instanceID:👀🧵 Topic"
+//	With bans (appended):          "... (🔒 <@U3>)"
 func (t *Thread) formatTitle() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -641,19 +690,31 @@ func (t *Thread) formatTitle() string {
 	sort.Strings(allowed)
 	sort.Strings(banned)
 
-	// 🔒 only when locked to owner (no allowed users)
+	// Build access marker: 👀 replaces 🔒 when observe is on
 	var label string
-	if !t.openAccess && len(allowed) == 0 {
-		label = fmt.Sprintf(":%s:🔒🧵 %s", t.instanceID, title)
-	} else if !t.openAccess && len(allowed) > 0 {
-		// Selective: mentions before topic text
+	if t.openAccess {
+		label = fmt.Sprintf(":%s:🧵 %s", t.instanceID, title)
+	} else if t.observe {
+		// Observe implies closed; 👀 replaces 🔒
+		if len(allowed) > 0 {
+			var mentions []string
+			for _, u := range allowed {
+				mentions = append(mentions, fmt.Sprintf("<@%s>", u))
+			}
+			label = fmt.Sprintf(":%s:👀🧵 %s %s", t.instanceID, strings.Join(mentions, " "), title)
+		} else {
+			label = fmt.Sprintf(":%s:👀🧵 %s", t.instanceID, title)
+		}
+	} else if len(allowed) > 0 {
+		// Selective without observe
 		var mentions []string
 		for _, u := range allowed {
 			mentions = append(mentions, fmt.Sprintf("<@%s>", u))
 		}
 		label = fmt.Sprintf(":%s:🧵 %s %s", t.instanceID, strings.Join(mentions, " "), title)
 	} else {
-		label = fmt.Sprintf(":%s:🧵 %s", t.instanceID, title)
+		// Locked (no allowed users, no observe)
+		label = fmt.Sprintf(":%s:🔒🧵 %s", t.instanceID, title)
 	}
 
 	// Append mode suffix (e.g. " — 📋 planning")
@@ -723,7 +784,10 @@ func (t *Thread) parseTitle(text string) {
 	text = ShortcodesToUnicode(text)
 	t.title = text
 
-	// 🔒🧵 means locked to owner; plain 🧵 means open or selective
+	// Detect 👀 observe marker (👀🧵 = observe mode, replaces 🔒)
+	t.observe = strings.Contains(text, "👀🧵")
+
+	// 🔒🧵 means locked to owner; 👀🧵 means observe (also not open); plain 🧵 means open or selective
 	locked := strings.Contains(text, "🔒🧵")
 
 	// Extract content after 🧵 (with optional space)
@@ -768,8 +832,12 @@ func (t *Thread) parseTitle(text string) {
 		t.topic = strings.TrimLeft(t.topic[end+1:], " ")
 	}
 
-	// If we found allowed users → selective (not fully open)
-	t.openAccess = len(t.allowedUsers) == 0
+	// 👀 means not open (observe replaces 🔒); otherwise open if no allowed users
+	if t.observe {
+		t.openAccess = false
+	} else {
+		t.openAccess = len(t.allowedUsers) == 0
+	}
 }
 
 // extractMentions parses <@U...> mentions from a string into the target map.
@@ -815,12 +883,13 @@ func (t *Thread) updateTitle() {
 	)
 }
 
-// SetClosed resets the access state to locked (owner only).
+// SetClosed resets the access state to locked (owner only), disables observe.
 // Use this to override inherited access from the thread title on join/resume.
 func (t *Thread) SetClosed() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.openAccess = false
+	t.observe = false
 	t.allowedUsers = make(map[string]bool)
 	t.bannedUsers = make(map[string]bool)
 }
@@ -830,20 +899,70 @@ func (t *Thread) SetOpen() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.openAccess = true
+	t.observe = false
 	t.allowedUsers = make(map[string]bool)
+}
+
+// SetObserve toggles the observe flag. When on, all messages are delivered
+// for passive learning, but the agent only responds to authorized users.
+func (t *Thread) SetObserve(on bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.observe = on
+}
+
+// Observe returns whether the observe flag is set.
+func (t *Thread) Observe() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.observe
 }
 
 // AccessMode returns a human-readable description of the current access state.
 func (t *Thread) AccessMode() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	var base string
 	if t.openAccess {
-		return "open"
+		base = "open"
+	} else if len(t.allowedUsers) > 0 {
+		base = fmt.Sprintf("restricted (%d users)", len(t.allowedUsers))
+	} else {
+		base = "locked"
 	}
-	if len(t.allowedUsers) > 0 {
-		return fmt.Sprintf("restricted (%d users)", len(t.allowedUsers))
+	if t.observe && !t.openAccess {
+		return "observe+" + base
 	}
-	return "locked"
+	return base
+}
+
+// isVisible returns true if a message from userID should be delivered to the agent.
+// This differs from isAuthorized: in observe mode, all messages are visible
+// even if the user is not authorized to get responses.
+func (t *Thread) isVisible(userID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Open access: everything visible
+	if t.openAccess {
+		return true
+	}
+
+	// Observe mode: all messages visible
+	if t.observe {
+		return true
+	}
+
+	// Otherwise, only authorized users are visible
+	// (inline isAuthorized logic to avoid double-locking)
+	if t.bannedUsers[userID] && userID != t.ownerID {
+		return false
+	}
+	if t.ownerID == "" || userID == t.ownerID {
+		return true
+	}
+	return t.allowedUsers[userID]
 }
 
 // SetModeSuffix sets a suffix appended to the thread title (e.g. " — 📋 planning")
@@ -954,6 +1073,8 @@ func (t *Thread) handleCommand(userID, cmd string) (bool, string) {
 		// allow
 	case "/lock", "/close":
 		// allow
+	case "/observe":
+		// allow
 	default:
 		return false, ""
 	}
@@ -971,6 +1092,7 @@ func (t *Thread) handleCommand(userID, cmd string) (bool, string) {
 		if len(parts) == 1 {
 			// /open — open for everyone
 			t.openAccess = true
+			t.observe = false
 			t.allowedUsers = make(map[string]bool)
 			feedback = "🔓 Thread opened for everyone."
 		} else {
@@ -988,13 +1110,14 @@ func (t *Thread) handleCommand(userID, cmd string) (bool, string) {
 		}
 	case "/lock", "/close":
 		if len(parts) == 1 {
-			// /lock — lock to owner only, reset everything
+			// /lock — lock to owner only, reset everything (disables observe)
 			t.openAccess = false
+			t.observe = false
 			t.allowedUsers = make(map[string]bool)
 			t.bannedUsers = make(map[string]bool)
 			feedback = "🔒 Thread locked to owner only."
 		} else {
-			// /lock <@U1> — ban specific users
+			// /lock <@U1> — ban specific users (does NOT touch observe flag)
 			var banned []string
 			for _, mention := range parts[1:] {
 				if uid := parseMention(mention); uid != "" {
@@ -1004,6 +1127,18 @@ func (t *Thread) handleCommand(userID, cmd string) (bool, string) {
 				}
 			}
 			feedback = fmt.Sprintf("🔒 Banned %s.", strings.Join(banned, " "))
+		}
+	case "/observe":
+		if t.observe {
+			// Already observing: turn off (keeps base mode)
+			t.observe = false
+			feedback = "👀 Observe mode off."
+		} else {
+			// Switch to closed + observe
+			t.openAccess = false
+			t.observe = true
+			t.allowedUsers = make(map[string]bool)
+			feedback = "👀 Observe mode on — reading all messages, responding only to owner."
 		}
 	}
 	t.mu.Unlock()
@@ -1160,6 +1295,7 @@ func (t *Thread) helpText() string {
 		"  `:%s:: /lock` — lock to owner only\n"+
 		"  `:%s:: /lock @user` — ban specific users\n"+
 		"  `:%s:: /close` — alias for /lock\n"+
+		"  `:%s:: /observe` — toggle observe mode (read all, respond to owner)\n"+
 		"\n"+
 		"*Session* (owner only)\n"+
 		"  `:%s:: /sandbox` — toggle sandbox on/off (restarts session)\n"+
@@ -1172,7 +1308,7 @@ func (t *Thread) helpText() string {
 		"  `:%s:: /help` — show this help\n"+
 		"  Other `/commands` are forwarded to Claude.",
 		id, emoji,
-		id, id, id, id, id, id, id, id, id, id, id)
+		id, id, id, id, id, id, id, id, id, id, id, id)
 }
 
 // parseMention extracts a user ID from a Slack mention ("<@U123>").

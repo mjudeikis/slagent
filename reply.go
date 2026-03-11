@@ -210,20 +210,32 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 		}
 
 		// Check authorization — re-read title if joined and initially denied
-		if !t.isAuthorized(msg.User) {
-			if t.joined {
-				t.refreshTitle()
+		authorized := t.isAuthorized(msg.User)
+		if !authorized && t.joined {
+			t.refreshTitle()
+			authorized = t.isAuthorized(msg.User)
+		}
+
+		if !authorized {
+			// Tell the user they're not authorized when they try to interact directly
+			if targeted && targetID == t.instanceID {
+				t.PostEphemeral(msg.User, t.emoji+" 🚫 Not authorized. Ask the thread owner to `/open`.")
+			} else if !targeted && isMistargetedToUs(msg.Text, t.instanceID) {
+				t.PostEphemeral(msg.User, t.emoji+" 🚫 Not authorized. Ask the thread owner to `/open`.")
 			}
-			if !t.isAuthorized(msg.User) {
-				// Tell the user via ephemeral when addressing us directly or near-miss
-				if targeted && targetID == t.instanceID {
-					t.PostEphemeral(msg.User, t.emoji+" 🚫 Not authorized. Ask the thread owner to `/open`.")
-				} else if !targeted && isMistargetedToUs(msg.Text, t.instanceID) {
-					t.PostEphemeral(msg.User, t.emoji+" 🚫 Not authorized. Ask the thread owner to `/open`.")
-				}
-				t.advanceLastTS(msg.Timestamp)
-				continue
+
+			// In observe mode, still deliver for passive learning
+			if t.isVisible(msg.User) {
+				user := t.resolveUser(msg.User)
+				replies = append(replies, Reply{
+					User:    user,
+					UserID:  msg.User,
+					Text:    msg.Text,
+					Observe: true,
+				})
 			}
+			t.advanceLastTS(msg.Timestamp)
+			continue
 		}
 
 		// Non-command messages are delivered to all instances.

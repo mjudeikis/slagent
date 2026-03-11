@@ -56,10 +56,15 @@ slaude resume https://team.slack.com/archives/C123/p1234567890123456#abc123@1700
 | `-c, --channel` | Slack channel name or ID (start only) |
 | `-u, --user` | Slack user(s) for DM (start only) |
 | `-w, --workspace` | Slack workspace URL (uses default if omitted) |
-| `--open` | Start with thread open for all (start only) |
-| `--closed` | Override inherited access to locked (join/resume only) |
+| `--locked` | Lock to owner only (mutually exclusive with --observe/--open) |
+| `--observe` | Observe mode: read all messages, respond only to owner |
+| `--open` | Open thread for all participants |
 | `--debug` | Write debug logs |
 | `[topic...]` | Positional topic arg |
+
+When no access flag is given:
+- **Interactive** (PTY detected via `go-isatty`): prompts `Closed, oBserve, or open? [cBo]`
+- **Non-interactive**: `start` defaults to locked, `join`/`resume` default to observe
 
 Everything after `--` is passed through to the Claude subprocess. slaude does
 not own `--permission-mode`, `--resume`, `--system-prompt`, etc. — these are
@@ -478,39 +483,69 @@ In `session.go`, replies are split into commands and feedback:
 
 ## Thread Access Control
 
-Thread access is managed through `/open` and `/lock` commands via emoji-prefix
-targeting (`:shortcode:: /open`). Access state is reflected in the thread title.
+Access has two independent axes:
+
+**Base mode** — who the agent responds to:
+- **Locked**: owner only
+- **Selective**: owner + listed users
+- **Open**: everyone
+
+**Observe flag** — who the agent sees (orthogonal to base mode):
+- **Off**: non-authorized messages filtered out
+- **On**: all messages delivered for passive learning, agent only responds to authorized users
+
+In observe mode, messages from non-authorized users are tagged `[observe-only]`
+in the feedback sent to Claude. The system prompt tells Claude not to respond
+to these. Users who try to interact directly still get a "🚫 Not authorized"
+ephemeral.
 
 ### Commands
 
 | Command | Effect |
 |---------|--------|
-| `/open` | Open for everyone |
+| `/open` | Open for everyone (disables observe) |
 | `/open <@U1> <@U2>` | Allow specific users (additive) |
-| `/lock` | Lock to owner only (clears all) |
-| `/lock <@U1>` | Ban specific users |
+| `/lock` | Lock to owner only, clears all (disables observe) |
+| `/lock <@U1>` | Ban specific users (does NOT touch observe flag) |
 | `/close` | Alias for `/lock` |
+| `/observe` | Toggle observe mode (if off: switch to locked + observe; if on: turn off) |
 
 ### Title Format
 
 The thread parent message reflects the access state:
 - `🔒🧵 Topic` — locked (owner only)
+- `👀🧵 Topic` — observe (locked + reading all messages)
 - `🧵 Topic` — open for all
-- `🧵 <@U1> <@U2> Topic` — open for specific users
-- `🧵 Topic (🔒 <@U3>)` — open but with banned users
+- `🧵 <@U1> <@U2> Topic` — selective (specific users)
+- `👀🧵 <@U1> <@U2> Topic` — selective + observe
+- `🧵 Topic (🔒 <@U3>)` — with banned users
 
-On `Resume()`, the title is parsed to recover the access state.
+The 👀 marker replaces 🔒 (not stacks on top). `parseTitle()` detects `👀🧵`
+and sets `observe = true`. On `Resume()`, the title is parsed to recover
+access state including the observe flag.
+
+### Message Delivery (Two-Tier Authorization)
+
+`isAuthorized()` — determines who the agent responds to (unchanged).
+`isVisible()` — determines who the agent sees. Returns true if:
+- Open access, OR
+- Observe mode is on, OR
+- User is authorized
+
+In `pollOnce()`:
+- `isVisible()` gates message delivery
+- `isAuthorized()` gates whether the reply is marked `Observe: true`
+- Commands still require `isAuthorized()` (observe-only users can't send commands)
 
 ### Joined Instance Isolation
 
 When an instance joins or resumes a thread (`Thread.Resume()`), it sets
 `t.joined = true`. Joined instances:
 
-- **Inherit** the access state from the thread title (open/locked/allowed users)
-- **Can override** with `--closed` (`Thread.SetClosed()`) to start locked
-  regardless of the inherited state
-- **Do not persist** access changes back to the thread title — `/open` and
-  `/lock` commands only affect in-memory state for that instance
+- **Inherit** the access state from the thread title (open/locked/observe/allowed users)
+- **Can override** with `--locked` (`Thread.SetClosed()`) or `--observe`
+- **Do not persist** access changes back to the thread title — `/open`,
+  `/lock`, and `/observe` commands only affect in-memory state for that instance
 - **Display** the current access mode in the start banner (`Thread.AccessMode()`)
 
 This means the thread creator owns the shared title, while joined instances
@@ -522,6 +557,8 @@ manage their own access independently.
 - Owner can never be banned
 - `/open <@U>` unbans a previously banned user
 - `/lock <@U>` removes from the allowed list
+- `/open` (no args) disables observe
+- `/lock` (no args) disables observe
 - Other slaude instances are subject to the same access rules
 
 ## Dependencies
@@ -529,6 +566,7 @@ manage their own access independently.
 | Dependency | Purpose |
 |---|---|
 | `github.com/alecthomas/kong` | CLI argument parsing |
+| `github.com/mattn/go-isatty` | PTY detection for interactive prompts |
 
 Plus the slagent library and its transitive dependencies.
 
