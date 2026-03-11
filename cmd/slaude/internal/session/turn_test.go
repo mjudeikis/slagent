@@ -165,3 +165,69 @@ func TestToolTrackerFinishIncludesDetail(t *testing.T) {
 		t.Errorf("Finish detail = %q, want session.go", m.calls[1].detail)
 	}
 }
+
+func TestSilentTurnsCountdown(t *testing.T) {
+	s := &Session{silentTurnsLeft: 3}
+
+	// Initial state: 3 turns allowed
+	if s.silentTurnsLeft != 3 {
+		t.Fatalf("initial = %d, want 3", s.silentTurnsLeft)
+	}
+
+	// Simulate silent turn: no output
+	s.silentTurnsLeft--
+	if s.silentTurnsLeft != 2 {
+		t.Errorf("after 1 silent: %d, want 2", s.silentTurnsLeft)
+	}
+
+	s.silentTurnsLeft--
+	s.silentTurnsLeft--
+	if s.silentTurnsLeft != 0 {
+		t.Errorf("after 3 silent: %d, want 0", s.silentTurnsLeft)
+	}
+
+	// Output resets to 3
+	s.silentTurnsLeft = 3
+	if s.silentTurnsLeft != 3 {
+		t.Errorf("after reset: %d, want 3", s.silentTurnsLeft)
+	}
+}
+
+func TestStartThinkingSuppressedWhenSilent(t *testing.T) {
+	// Without a thread, startThinking always returns nil
+	s := &Session{silentTurnsLeft: 0}
+	turn := s.startThinking()
+	if turn != nil {
+		t.Error("startThinking with no thread should return nil")
+	}
+
+	// With silentTurnsLeft > 0 but no thread, still nil
+	s.silentTurnsLeft = 3
+	turn = s.startThinking()
+	if turn != nil {
+		t.Error("startThinking with no thread should return nil even with turns left")
+	}
+}
+
+func TestStartThinkingCounterIntegration(t *testing.T) {
+	s := &Session{silentTurnsLeft: 3}
+
+	// Simulate 3 silent turns
+	for i := 0; i < 3; i++ {
+		if s.silentTurnsLeft <= 0 {
+			t.Fatalf("should still have turns left at iteration %d", i)
+		}
+		s.silentTurnsLeft--
+	}
+
+	// Now suppressed
+	if s.silentTurnsLeft > 0 {
+		t.Error("should be suppressed after 3 silent turns")
+	}
+
+	// Output resets
+	s.silentTurnsLeft = 3
+	if s.silentTurnsLeft != 3 {
+		t.Error("reset should restore to 3")
+	}
+}
