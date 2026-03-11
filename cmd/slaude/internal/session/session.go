@@ -281,7 +281,13 @@ func (s *Session) initialTurn() error {
 	if s.cfg.Topic == "" || hasArg(s.cfg.ClaudeArgs, "--resume") {
 		return nil
 	}
-	if err := s.proc.Send(s.cfg.Topic); err != nil {
+
+	// In observe mode, tag initial message so Claude reads but doesn't respond
+	msg := s.cfg.Topic
+	if s.cfg.Observe {
+		msg = "[observe-only]: " + msg
+	}
+	if err := s.proc.Send(msg); err != nil {
 		return fmt.Errorf("send topic: %w", err)
 	}
 	if err := s.readTurn(); err != nil {

@@ -1656,6 +1656,9 @@ func TestPollRepliesDeliversFinalizedFromOtherInstance(t *testing.T) {
 	if replies[0].Text != "other slaude response" {
 		t.Errorf("reply text = %q, want %q", replies[0].Text, "other slaude response")
 	}
+	if !replies[0].Observe {
+		t.Error("other-instance messages should be marked as observe-only")
+	}
 }
 
 func TestPollRepliesSkipsFinalizedFromOwnInstance(t *testing.T) {
@@ -2457,6 +2460,9 @@ func TestOtherInstanceVisibleInObserveMode(t *testing.T) {
 	}
 	if replies[0].Text != "hello from dog" {
 		t.Errorf("reply text = %q, want %q", replies[0].Text, "hello from dog")
+	}
+	if !replies[0].Observe {
+		t.Error("other-instance messages should be marked as observe-only")
 	}
 }
 

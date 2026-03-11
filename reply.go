@@ -101,6 +101,17 @@ func (t *Thread) pollOnce() ([]Reply, error) {
 				t.advanceLastTS(msg.Timestamp)
 				continue
 			}
+
+			// Deliver as observe-only so Claude reads but doesn't respond
+			user := t.resolveUser(msg.User)
+			replies = append(replies, Reply{
+				User:    user,
+				UserID:  msg.User,
+				Text:    msg.Text,
+				Observe: true,
+			})
+			t.advanceLastTS(msg.Timestamp)
+			continue
 		case blockNone:
 			// Not a slagent message — skip bot messages (webhooks, integrations)
 			if msg.BotID != "" {
