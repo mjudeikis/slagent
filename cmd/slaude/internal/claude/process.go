@@ -2,7 +2,6 @@ package claude
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +13,51 @@ import (
 	"syscall"
 )
 
+// ringBuffer is a fixed-capacity circular buffer that keeps the last N bytes
+// written to it. It implements io.Writer.
+type ringBuffer struct {
+	buf  []byte
+	size int
+	pos  int
+	full bool
+}
+
+func newRingBuffer(size int) *ringBuffer {
+	return &ringBuffer{buf: make([]byte, size), size: size}
+}
+
+func (r *ringBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if n >= r.size {
+		// Data larger than buffer — just keep the tail.
+		copy(r.buf, p[n-r.size:])
+		r.pos = 0
+		r.full = true
+		return n, nil
+	}
+	// Write may wrap around.
+	if r.pos+n <= r.size {
+		copy(r.buf[r.pos:], p)
+		r.pos += n
+	} else {
+		// Wrapping — buffer is now full.
+		first := r.size - r.pos
+		copy(r.buf[r.pos:], p[:first])
+		copy(r.buf, p[first:])
+		r.pos = n - first
+		r.full = true
+	}
+	return n, nil
+}
+
+func (r *ringBuffer) String() string {
+	if !r.full {
+		return string(r.buf[:r.pos])
+	}
+	// Reconstruct: from pos to end, then from start to pos.
+	return string(r.buf[r.pos:]) + string(r.buf[:r.pos])
+}
+
 // Process wraps a Claude Code subprocess in stream-json mode.
 type Process struct {
 	cmd       *exec.Cmd
@@ -24,7 +68,7 @@ type Process struct {
 	}
 	scanner   *bufio.Scanner
 	sessionID string
-	stderrBuf *bytes.Buffer // always captures stderr for error reporting
+	stderrBuf *ringBuffer // captures last 10KB of stderr for error reporting
 	waited    sync.Once     // guards cmd.Wait to prevent double-wait
 	waitErr   error         // result of cmd.Wait
 }
@@ -70,9 +114,9 @@ func Start(ctx context.Context, opts ...Option) (*Process, error) {
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Env = env
 
-	// Always capture stderr in a buffer for error reporting.
+	// Always capture the tail of stderr in a ring buffer for error reporting.
 	// Also tee to the configured stderr destination (os.Stderr by default).
-	stderrBuf := &bytes.Buffer{}
+	stderrBuf := newRingBuffer(10 * 1024) // 10KB
 	stderrDest := io.Writer(os.Stderr)
 	if cfg.stderr != nil {
 		stderrDest = cfg.stderr
