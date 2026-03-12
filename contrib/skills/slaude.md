@@ -35,13 +35,18 @@ slaude start -c CHANNEL -- "your prompt here"
 |------|-------------|
 | `-c CHANNEL` | Slack channel name or ID (required unless using `-u`) |
 | `-u USER` | DM a user instead of posting to a channel |
-| `--open` | Allow all thread participants to interact (default: locked to owner) |
+| `--locked` | Lock to owner only (default for `start`) |
+| `--observe` | Observe mode: read all messages, only respond to authorized users |
+| `--open` | Open for all thread participants |
 | `--debug` | Write raw JSON events for troubleshooting |
 | `--no-bye` | Skip goodbye message on exit |
 | `--dangerous-auto-approve green` | Auto-approve read-only operations |
 | `--dangerous-auto-approve yellow` | Auto-approve local writes too |
 | `--dangerous-auto-approve-network known` | Auto-approve network to known hosts (GitHub, npm, Go proxy, etc.) |
 | `--dangerous-auto-approve-network any` | Auto-approve all network access |
+
+**Access mode flags** (`--locked`, `--observe`, `--open`) are mutually exclusive.
+When no flag is given — interactive terminal prompts `Closed, oBserve, or open? [cBo]`; non-interactive: `start` defaults to `--locked`, `join`/`resume` default to `--observe`.
 
 Everything after `--` passes directly to Claude Code. Use this for Claude-specific flags:
 ```bash
@@ -128,7 +133,8 @@ Add a new agent instance to an existing Slack thread:
 slaude join https://team.slack.com/archives/C123/p1234567890 "help with tests"
 ```
 - Each instance gets a unique emoji identity (e.g. fox, dog, koala)
-- Use `--closed` to ignore inherited access state and start locked
+- Defaults to `--observe` (non-interactive): reads all messages, responds only to authorized users
+- Use `--locked` to start locked to owner only; `--open` to open for everyone
 
 ## Resuming a Session
 
@@ -154,9 +160,23 @@ Multiple slaude instances can share one Slack thread. Each gets a unique emoji.
 | Command | Effect |
 |---------|--------|
 | `:emoji:: /open` | Open thread for everyone |
-| `:emoji:: /open @user1 @user2` | Allow specific users |
-| `:emoji:: /lock` | Lock to owner only |
+| `:emoji:: /open @user1 @user2` | Allow specific users (additive) |
+| `:emoji:: /lock` | Lock to owner only (resets all, disables observe) |
 | `:emoji:: /lock @user` | Ban a specific user |
+| `:emoji:: /observe` | Toggle observe mode on/off |
+
+**Observe mode** — an orthogonal flag on top of locked/open/selective access:
+- **Off** (default): non-authorized messages filtered out, agent ignores them
+- **On**: all messages delivered for passive learning; agent still only responds to authorized users; non-authorized users get an ephemeral "not authorized" if they try to interact directly
+
+Thread title encodes access state:
+- `🔒🧵 Topic` — locked (owner only)
+- `👀🧵 Topic` — observe (locked + reading all)
+- `🧵 Topic` — open for all
+- `🧵 @user1 @user2 Topic` — selective (specific users)
+- `👀🧵 @user1 @user2 Topic` — selective + observe
+
+`/lock` and `/open` (without args) disable observe. Each instance manages access independently — `/open` and `/lock` on a joined/resumed instance only affect that instance's in-memory state.
 
 ## Sub-Agent Management (for OpenClaw)
 
