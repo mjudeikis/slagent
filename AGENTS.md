@@ -76,6 +76,7 @@ Module: `github.com/sttts/slagent`
 - `AGENTS.md` references README for UX and adds implementation details only.
 - `doc/designs/` contains detailed design docs — keep in sync with code changes.
 - When changing behavior, update README.md, AGENTS.md, and relevant design docs together.
+- `contrib/skills/slaude.md` is the OpenClaw skill file for `slaude`. **Keep it in sync with README.md, design docs, and any new features or flags.** When you add a command, change a flag, or update session behaviour, update `contrib/skills/slaude.md` in the same commit.
 
 ## Coding Style
 - Comment style: one-line comment above small blocks of logically connected lines.
